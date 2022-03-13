@@ -8,7 +8,12 @@ import numpy as np
 class Tree(ABC):
     @abstractmethod
     def predict(self, xs: np.ndarray) -> np.ndarray:
-        pass
+        """
+        Predict features for inputs.
+
+        :param xs: an [N x n_features] array.
+        :return: an [N x n_outputs] array.
+        """
 
 
 @dataclass
@@ -36,7 +41,7 @@ class AxisTreeBranch(TreeBranch):
     threshold: np.ndarray
 
     def decision(self, xs: np.ndarray) -> np.ndarray:
-        return xs[self.axis] > self.threshold
+        return xs[:, self.axis] > self.threshold
 
 
 @dataclass
@@ -54,17 +59,20 @@ class LinearTreeLeaf(Tree):
     bias: np.ndarray
 
     def predict(self, xs: np.ndarray) -> np.ndarray:
-        return xs @ self.coef + self.bias
+        return (xs @ self.coef + self.bias).reshape([len(xs), -1])
 
 
 @dataclass
 class LowRankTreeLeaf(Tree):
     coef_contract: np.ndarray
+    bias_contract: np.ndarray
     coef_expand: np.ndarray
-    bias: np.ndarray
+    bias_expand: np.ndarray
 
     def predict(self, xs: np.ndarray) -> np.ndarray:
-        return (xs @ self.coef_contract) @ self.coef_expand + self.bias
+        return (
+            xs @ self.coef_contract + self.bias_contract
+        ) @ self.coef_expand + self.bias_expand
 
 
 @dataclass
@@ -72,4 +80,4 @@ class ConstantTreeLeaf(Tree):
     output: np.ndarray
 
     def predict(self, xs: np.ndarray) -> np.ndarray:
-        return np.tile(self.output[None], [len(xs), 1])
+        return np.tile(self.output.reshape([1, -1]), [len(xs), 1])

@@ -1,83 +1,108 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from abc import abstractmethod
+from copy import deepcopy
 
-import numpy as np
+import torch
+import torch.nn as nn
 
 
-@dataclass
-class Tree(ABC):
+class Tree(nn.Module):
     @abstractmethod
-    def predict(self, xs: np.ndarray) -> np.ndarray:
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
         """
         Predict features for inputs.
 
-        :param xs: an [N x n_features] array.
-        :return: an [N x n_outputs] array.
+        :param xs: an [N x n_features] tensor.
+        :return: an [N x n_outputs] tensor.
         """
 
 
-@dataclass
-class TreeBranch(Tree):
-    left: Tree
-    right: Tree
+class TreeLeaf(Tree):
+    pass
 
-    def predict(self, xs: np.ndarray) -> np.ndarray:
+
+class TreeBranch(Tree):
+    def __init__(self, left: Tree, right: Tree):
+        super().__init__()
+        self.left = left
+        self.right = right
+
+    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
+        result = deepcopy(self)
+        result.left = left
+        result.right = right
+        return result
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
         decisions = self.decision(xs)
-        sub_left = self.left.predict(xs[np.logical_not(decisions)])
-        sub_right = self.right.predict(xs[decisions])
-        out = np.zeros_like(sub_left, shape=(len(xs), sub_left.shape[1]))
-        out[np.logical_not(decisions)] = sub_left
+        sub_left = self.left(xs[~decisions])
+        sub_right = self.right(xs[decisions])
+
+        out = torch.zeros(len(xs), sub_left.shape[1]).to(sub_left)
+        out[~decisions] = sub_left
         out[decisions] = sub_right
         return out
 
     @abstractmethod
-    def decision(self, xs: np.ndarray) -> np.ndarray:
+    def decision(self, xs: torch.Tensor) -> torch.Tensor:
         pass
 
 
-@dataclass
 class AxisTreeBranch(TreeBranch):
-    axis: int
-    threshold: np.ndarray
+    def __init__(self, left: Tree, right: Tree, axis: int, threshold: torch.Tensor):
+        super().__init__(left, right)
+        self.axis = axis
+        self.register_buffer("threshold", threshold)
 
-    def decision(self, xs: np.ndarray) -> np.ndarray:
+    def decision(self, xs: torch.Tensor) -> torch.Tensor:
         return xs[:, self.axis] > self.threshold
 
 
-@dataclass
 class ObliqueTreeBranch(TreeBranch):
-    coef: np.ndarray
-    threshold: np.ndarray
+    def __init__(
+        self, left: Tree, right: Tree, coef: torch.Tensor, threshold: torch.Tensor
+    ):
+        super().__init__(left, right)
+        self.register_buffer("coef", coef)
+        self.register_buffer("threshold", threshold)
 
-    def decision(self, xs: np.ndarray) -> np.ndarray:
-        return xs @ self.coef > self.threshold
-
-
-@dataclass
-class LinearTreeLeaf(Tree):
-    coef: np.ndarray
-    bias: np.ndarray
-
-    def predict(self, xs: np.ndarray) -> np.ndarray:
-        return (xs @ self.coef + self.bias).reshape([len(xs), -1])
+    def decision(self, xs: torch.Tensor) -> torch.Tensor:
+        return (xs @ self.coef).view(-1) > self.threshold
 
 
-@dataclass
-class LowRankTreeLeaf(Tree):
-    coef_contract: np.ndarray
-    bias_contract: np.ndarray
-    coef_expand: np.ndarray
-    bias_expand: np.ndarray
+class LinearTreeLeaf(TreeLeaf):
+    def __init__(self, coef: torch.Tensor, bias: torch.Tensor):
+        super().__init__()
+        self.coef = nn.Parameter(coef)
+        self.bias = nn.Parameter(bias)
 
-    def predict(self, xs: np.ndarray) -> np.ndarray:
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        return (xs @ self.coef + self.bias).view(len(xs), self.bias.numel())
+
+
+class LowRankTreeLeaf(TreeLeaf):
+    def __init__(
+        self,
+        coef_contract: torch.Tensor,
+        bias_contract: torch.Tensor,
+        coef_expand: torch.Tensor,
+        bias_expand: torch.Tensor,
+    ):
+        super().__init__()
+        self.coef_contract = nn.Parameter(coef_contract)
+        self.bias_contract = nn.Parameter(bias_contract)
+        self.coef_expand = nn.Parameter(coef_expand)
+        self.bias_expand = nn.Parameter(bias_expand)
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
         return (
             xs @ self.coef_contract + self.bias_contract
         ) @ self.coef_expand + self.bias_expand
 
 
-@dataclass
-class ConstantTreeLeaf(Tree):
-    output: np.ndarray
+class ConstantTreeLeaf(TreeLeaf):
+    def __init__(self, output: torch.Tensor):
+        super().__init__()
+        self.output = nn.Parameter(output)
 
-    def predict(self, xs: np.ndarray) -> np.ndarray:
-        return np.tile(self.output.reshape([1, -1]), [len(xs), 1])
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        return self.output.view(1, -1).repeat(len(xs), 1)

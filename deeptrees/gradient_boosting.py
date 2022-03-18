@@ -110,12 +110,18 @@ class GradientBooster:
     loss: BoostingLoss
     learning_rate: float = 1.0
     n_estimators: int = 100
+    verbose: bool = False
 
     def fit(self, xs: torch.Tensor, ys: torch.Tensor) -> AdditiveEnsemble:
         model = AdditiveEnsemble(init_output=self.loss.initial_leaf_value(ys))
-        for _ in range(self.n_estimators):
+        for i in range(self.n_estimators):
             tree = self.add_tree(model, xs, ys)
             model.estimators.append(tree)
+            if self.verbose:
+                with torch.no_grad():
+                    output = model(xs)
+                    loss = self.loss(output, ys).mean().item()
+                print(f"iter {i+1}: loss={loss:.05f}")
         return model
 
     def add_tree(self, model: nn.Module, xs: torch.Tensor, ys: torch.Tensor) -> Tree:

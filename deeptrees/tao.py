@@ -191,6 +191,7 @@ class TAOTreeBuilder(TreeBuilder):
     reject_unimprovement: bool = True
     max_iterations: int = 15
     min_improvement: float = 1e-5
+    verbose: bool = False
 
     def fit(self, xs: torch.Tensor, ys: torch.Tensor) -> Tree:
         tree = self.base_builder.fit(xs, ys)
@@ -203,10 +204,12 @@ class TAOTreeBuilder(TreeBuilder):
             reject_unimprovement=self.reject_unimprovement,
         )
         cur_loss = None
-        for _ in range(self.max_iterations):
+        for i in range(self.max_iterations):
             result = tao.optimize(tree)
             tree = result.tree
             loss = result.losses.mean().item()
+            if self.verbose:
+                print(f"- TAO iteration {i}: loss={loss:.05f}")
             if cur_loss is not None and loss > cur_loss - self.min_improvement:
                 break
             cur_loss = loss

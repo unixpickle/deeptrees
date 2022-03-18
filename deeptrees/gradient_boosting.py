@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -28,13 +28,21 @@ class BoostingLoss(nn.Module):
         loss.
         """
 
+    @abstractmethod
+    def initial_leaf_value(self, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Get a reasonable default initial leaf value for the targets.
+
+        This method is responsible for inferring the output shape.
+        """
+
     def gradient(self, outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        create_graph = outputs.requires_grad or targets.requires_grad
-        if not outputs.requires_grad:
-            outputs = outputs.clone().requires_grad_(True)
-        return torch.autograd.grad(
-            self(outputs, targets).sum(), (outputs,), create_graph=create_graph
-        )[0]
+        if outputs.requires_grad:
+            outputs = outputs.detach()
+        else:
+            outputs = outputs.clone()
+        outputs = outputs.requires_grad_(True)
+        return torch.autograd.grad(self(outputs, targets).sum(), (outputs,))[0]
 
 
 class BoostingMSELoss(BoostingLoss):
@@ -43,6 +51,9 @@ class BoostingMSELoss(BoostingLoss):
 
     def leaf_value(self, outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         return (targets - outputs).mean(0)
+
+    def initial_leaf_value(self, targets: torch.Tensor) -> torch.Tensor:
+        return targets.mean(0)
 
 
 class BoostingSoftmaxLoss(BoostingLoss):
@@ -53,7 +64,7 @@ class BoostingSoftmaxLoss(BoostingLoss):
 
     def forward(self, outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         log_probs = F.log_softmax(outputs, dim=-1)
-        if len(targets) == 1:
+        if len(targets.shape) == 1:
             return -log_probs[range(len(log_probs)), targets]
         else:
             return (-log_probs * targets).sum(-1)
@@ -65,20 +76,25 @@ class BoostingSoftmaxLoss(BoostingLoss):
         # A single Newton-Raphson step, as in
         # https://github.com/scikit-learn/scikit-learn/blob/7e1e6d09bcc2eaeba98f7e737aac2ac782f0e5f1/sklearn/ensemble/_gb_losses.py#L838
 
-        if targets.shape == 1:
-            targets_one_hot = torch.zeros_like(outputs)
-            targets_one_hot[range(len(outputs)), targets] = 1.0
-            targets = targets_one_hot
+        if len(targets.shape) == 1:
+            targets = _one_hot(targets, num_classes)
 
         numerator = residual.sum(0) * (num_classes - 1) / num_classes
         denominator = ((targets - residual) * (1 - (targets - residual))).sum(0)
-        return torch.where(denominator < 1e-8, 0.0, numerator / denominator)
+        return torch.where(
+            denominator < 1e-8, torch.zeros_like(numerator), numerator / denominator
+        )
+
+    def initial_leaf_value(self, targets: torch.Tensor) -> torch.Tensor:
+        if len(targets.shape) == 1:
+            targets = _one_hot(targets)
+        return (targets.mean(0) + 1e-12).log()
 
 
 class AdditiveEnsemble(nn.Module):
-    def __init__(self, estimators: List[nn.Module], init_output: torch.Tensor):
+    def __init__(self, init_output: torch.Tensor, estimators: Sequence[nn.Module] = ()):
         super().__init__()
-        self.estimators = nn.MouleList(estimators)
+        self.estimators = nn.ModuleList(estimators)
         self.register_buffer("init_output", init_output)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -93,6 +109,14 @@ class GradientBooster:
     builder: TreeBuilder
     loss: BoostingLoss
     learning_rate: float = 1.0
+    n_estimators: int = 100
+
+    def fit(self, xs: torch.Tensor, ys: torch.Tensor) -> AdditiveEnsemble:
+        model = AdditiveEnsemble(init_output=self.loss.initial_leaf_value(ys))
+        for _ in range(self.n_estimators):
+            tree = self.add_tree(model, xs, ys)
+            model.estimators.append(tree)
+        return model
 
     def add_tree(self, model: nn.Module, xs: torch.Tensor, ys: torch.Tensor) -> Tree:
         with torch.no_grad():
@@ -126,3 +150,9 @@ class GradientBooster:
         return ConstantTreeLeaf(
             output=self.loss.leaf_value(prev_outputs, ys) * self.learning_rate
         )
+
+
+def _one_hot(vec: torch.Tensor, num_classes: Optional[int] = None) -> torch.Tensor:
+    if num_classes is None:
+        num_classes = vec.max().item() + 1
+    return (vec[:, None] == torch.arange(num_classes)).float()

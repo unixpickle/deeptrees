@@ -15,9 +15,18 @@ class Tree(nn.Module):
         :return: an [N x n_outputs] tensor.
         """
 
+    @abstractmethod
+    def prune(self, xs: torch.Tensor) -> "Tree":
+        """
+        Create a version of self such that all branches are taken by at least
+        one sample in xs.
+        """
+
 
 class TreeLeaf(Tree):
-    pass
+    def prune(self, xs: torch.Tensor) -> Tree:
+        _ = xs
+        return self
 
 
 class TreeBranch(Tree):
@@ -41,6 +50,14 @@ class TreeBranch(Tree):
         out[~decisions] = sub_left
         out[decisions] = sub_right
         return out
+
+    def prune(self, xs: torch.Tensor) -> Tree:
+        decisions = self.decision(xs)
+        if (decisions == 0).all().item():
+            return self.left
+        elif (decisions == 1).all().item():
+            return self.right
+        return self
 
     @abstractmethod
     def decision(self, xs: torch.Tensor) -> torch.Tensor:

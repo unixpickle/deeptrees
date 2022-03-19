@@ -213,4 +213,4 @@ class TAOTreeBuilder(TreeBuilder):
             if cur_loss is not None and loss > cur_loss - self.min_improvement:
                 break
             cur_loss = loss
-        return tree
+        return tree.prune(xs)

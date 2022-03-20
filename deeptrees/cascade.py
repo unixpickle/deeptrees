@@ -356,10 +356,19 @@ class CascadeSGD(CascadeModule):
     def evaluate(self, inputs: Batch) -> Batch:
         return self.contained(inputs)
 
-    def update_local(self, ctx: UpdateContext):
+    def update(
+        self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None
+    ) -> torch.Tensor:
         self.step.add_(1)
         if self.step.item() % self.interval == 0:
-            self.contained._update(ctx.loss_fn)
+            super().update(full_batch, loss_fn, batch_size=batch_size)
+            self.optimizer.zero_grad()
         else:
-            self.optimizer.step()
-        self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
+            all_losses = []
+            for indices, sub_batch in full_batch.batches(batch_size or len(full_batch)):
+                losses = loss_fn(indices, self(sub_batch))
+                all_losses.append(losses.detach())
+                losses.mean().backward()
+                self.optimizer.step()
+                self.optimizer.zero_grad()

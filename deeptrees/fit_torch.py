@@ -33,6 +33,10 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
         left_losses: torch.Tensor,
         right_losses: torch.Tensor,
     ) -> TreeBranch:
+        xs = xs.detach()
+        left_losses = left_losses.detach()
+        right_losses = right_losses.detach()
+
         classes = right_losses < left_losses
         if (classes == 0).all() or (classes == 1).all():
             return cur_branch

@@ -245,10 +245,11 @@ class CascadeSequential(CascadeModule):
         for i in range(len(self.sequence))[::-1]:
 
             def child_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
-                final_outputs = outputs
-                for layer in self.sequence[i + 1 :]:
-                    final_outputs = layer(final_outputs)
-                return ctx.loss_fn(indices, final_outputs)
+                with torch.no_grad():
+                    final_outputs = outputs
+                    for layer in self.sequence[i + 1 :]:
+                        final_outputs = layer(final_outputs)
+                    return ctx.loss_fn(indices, final_outputs)
 
             child = self.sequence[i]
             child._update(child_loss_fn)

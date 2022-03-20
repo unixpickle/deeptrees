@@ -21,7 +21,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)
-    test_xs = test_xs.to(device), test_ys.to(device)
+    test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
     model = initialize_tao_dense(

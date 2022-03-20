@@ -1,4 +1,4 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple
@@ -80,7 +80,7 @@ class UpdateContext:
     output_grads: Optional[Batch] = None
 
 
-class CascadeModule(nn.Module):
+class CascadeModule(nn.Module, ABC):
     """
     An CascadeModule is a learnable component of a model that can be used in
     a deep network of decision trees. Unlike regular deep learning modules,
@@ -355,6 +355,9 @@ class CascadeSGD(CascadeModule):
 
     def evaluate(self, inputs: Batch) -> Batch:
         return self.contained(inputs)
+
+    def update_local(self, ctx: UpdateContext):
+        self.contained.update_local(ctx)
 
     def update(
         self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None

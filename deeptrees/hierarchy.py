@@ -5,6 +5,11 @@ from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
+import torch.optim as optim
+
+from .fit_base import TreeBranchBuilder
+from .tao import TAOBase, TAOResult
+from .tree import Tree, TreeBranch, TreeLeaf
 
 
 @dataclass
@@ -223,6 +228,7 @@ class HModule(nn.Module):
 
 class HSequential(HModule):
     def __init__(self, sequence: Sequence[HModule]):
+        super().__init__()
         self.sequence = nn.ModuleList(sequence)
 
     def evaluate(self, inputs: Batch) -> Batch:
@@ -242,3 +248,114 @@ class HSequential(HModule):
 
             child = self.sequence[i]
             child._update(child_loss_fn)
+
+
+class HTAO(HModule):
+    """
+    A tree in a hierarchical module that uses TAO for updates.
+
+    The provided TreeBranchBuilder should not change the types or structure of
+    the tree. In particular, the state_dict of trees should not change keys or
+    the shapes of values across updates.
+    """
+
+    def __init__(
+        self,
+        tree: Tree,
+        branch_builder: TreeBranchBuilder,
+        reject_unimprovement: bool = True,
+    ):
+        super().__init__()
+        self.tree = tree
+        self.branch_builder = branch_builder
+        self.reject_unimprovement = reject_unimprovement
+
+    def evaluate(self, inputs: Batch) -> Batch:
+        return Batch.with_x(self.tree(inputs.x))
+
+    def update_local(self, ctx: UpdateContext):
+        h_tao = _HierarchicalTAO(
+            xs=ctx.inputs.x,
+            loss_fn=ctx.loss_fn,
+            branch_builder=self.branch_builder,
+            reject_unimprovement=self.reject_unimprovement,
+        )
+        self.tree.load_state_dict(h_tao.optimize(self.tree).tree.state_dict())
+
+
+@dataclass
+class _HierarchicalTAO(TAOBase):
+    """
+    A concrete subclass of TAOBase that implements TAO with leaves that get
+    passed to the remainder of a network.
+    """
+
+    loss_fn: BatchLossFn
+    branch_builder: TreeBranchBuilder
+    reject_unimprovement: bool
+
+    def build_branch(
+        self,
+        cur_branch: TreeBranch,
+        sample_indices: torch.Tensor,
+        left_losses: torch.Tensor,
+        right_losses: torch.Tensor,
+    ) -> TAOResult:
+        xs = self.xs[sample_indices]
+        tree = self.branch_builder.fit_branch(
+            cur_branch=cur_branch,
+            xs=xs,
+            left_losses=left_losses,
+            right_losses=right_losses,
+        )
+        with torch.no_grad():
+            losses = torch.where(tree.decision(xs), right_losses, left_losses)
+            if self.reject_unimprovement:
+                old_losses = torch.where(
+                    cur_branch.decision(xs), right_losses, left_losses
+                )
+                if old_losses.mean().item() < losses.mean().item():
+                    tree = cur_branch
+                    losses = old_losses
+        return TAOResult(tree=tree, losses=losses)
+
+    def build_leaf(self, cur_leaf: TreeLeaf, sample_indices: torch.Tensor) -> TAOResult:
+        outputs = cur_leaf(self.xs[sample_indices])
+        return TAOResult(
+            tree=cur_leaf, losses=self.output_loss(sample_indices, outputs)
+        )
+
+    def output_loss(
+        self, sample_indices: torch.Tensor, outputs: torch.Tensor
+    ) -> torch.Tensor:
+        return self.loss_fn(sample_indices, Batch.with_x(outputs))
+
+
+class HSGD(HModule):
+    """
+    Wrap sub-modules to perform frequent gradient-based updates and less
+    frequent recursive update() calls.
+    """
+
+    def __init__(self, contained: HModule, interval: int, opt: optim.Optimizer):
+        super().__init__()
+        self.contained = contained
+        self.interval = interval
+        self.optimizer = opt
+        params = list(contained.parameters())
+        if len(params):
+            device = params[0].device
+        else:
+            device = torch.device("cpu")
+        self.register_buffer("step", torch.tensor(0, dtype=torch.int64, device=device))
+
+    def evaluate(self, inputs: Batch) -> Batch:
+        return self.contained(inputs)
+
+    def update_local(self, ctx: UpdateContext):
+        self.step.add_(1)
+        if self.step.item() % self.interval == 0:
+            self.contained._update(ctx.loss_fn)
+        else:
+            self.optimizer.step()
+        self.optimizer.zero_grad()

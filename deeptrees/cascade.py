@@ -227,6 +227,10 @@ class CascadeModule(nn.Module):
 
 
 class CascadeSequential(CascadeModule):
+    """
+    Sequentially compose multiple cascade modules.
+    """
+
     def __init__(self, sequence: Sequence[CascadeModule]):
         super().__init__()
         self.sequence = nn.ModuleList(sequence)

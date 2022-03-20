@@ -44,7 +44,7 @@ class TAOBase(ABC):
         self, sub_tree: Tree, sample_indices: Optional[torch.Tensor] = None
     ) -> TAOResult:
         if sample_indices is None:
-            sample_indices = torch.arange(len(self.xs))
+            sample_indices = torch.arange(len(self.xs)).to(self.xs.device)
 
         if len(sample_indices) == 0:
             return TAOResult(

@@ -161,4 +161,4 @@ class GradientBooster:
 def _one_hot(vec: torch.Tensor, num_classes: Optional[int] = None) -> torch.Tensor:
     if num_classes is None:
         num_classes = vec.max().item() + 1
-    return (vec[:, None] == torch.arange(num_classes)).float()
+    return (vec[:, None] == torch.arange(num_classes).to(vec)).float()

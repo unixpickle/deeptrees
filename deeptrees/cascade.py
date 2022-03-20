@@ -80,12 +80,12 @@ class UpdateContext:
     output_grads: Optional[Batch] = None
 
 
-class HModule(nn.Module):
+class CascadeModule(nn.Module):
     """
-    An "HModule" is short for "hierarchy module". These are modules that can be
-    used in a deep network of decision trees. Unlike regular deep learning
-    modules, each module gets a loss function that determines, per input, what
-    the loss would be regardless of the output for that input.
+    An CascadeModule is a learnable component of a model that can be used in
+    a deep network of decision trees. Unlike regular deep learning modules,
+    each cascade module gets a loss function that determines, per input, what
+    the global loss *would be* given an arbitrary output vector.
     """
 
     def __init__(self):
@@ -167,7 +167,7 @@ class HModule(nn.Module):
                            during the initial forward/backward passes.
         :return: a 1-D tensor of pre-update losses.
         """
-        self._apply_hmodules(lambda x: x._preparing_for_update())
+        self._apply_cascade(lambda x: x._preparing_for_update())
 
         # Propagate all of the samples to accumulate inputs, outputs, and
         # gradients at all of the nodes.
@@ -177,9 +177,9 @@ class HModule(nn.Module):
             all_losses.append(losses.detach())
             losses.sum().backward()
 
-        self._apply_hmodules(lambda x: x._updating())
+        self._apply_cascade(lambda x: x._updating())
         self._update(loss_fn)
-        self._apply_hmodules(lambda x: x._completed_update())
+        self._apply_cascade(lambda x: x._completed_update())
 
         return torch.cat(all_losses, dim=0)
 
@@ -194,9 +194,9 @@ class HModule(nn.Module):
         self._cached_outputs = []
         self._cached_grads = []
 
-    def _apply_hmodules(self, fn):
+    def _apply_cascade(self, fn):
         def apply_fn(module):
-            if isinstance(module, HModule):
+            if isinstance(module, CascadeModule):
                 fn(module)
 
         self.apply(apply_fn)
@@ -226,8 +226,8 @@ class HModule(nn.Module):
         )
 
 
-class HSequential(HModule):
-    def __init__(self, sequence: Sequence[HModule]):
+class CascadeSequential(CascadeModule):
+    def __init__(self, sequence: Sequence[CascadeModule]):
         super().__init__()
         self.sequence = nn.ModuleList(sequence)
 
@@ -250,9 +250,9 @@ class HSequential(HModule):
             child._update(child_loss_fn)
 
 
-class HTAO(HModule):
+class CascadeTAO(CascadeModule):
     """
-    A tree in a hierarchical module that uses TAO for updates.
+    A tree in a cascade module that uses TAO for updates.
 
     The provided TreeBranchBuilder should not change the types or structure of
     the tree. In particular, the state_dict of trees should not change keys or
@@ -274,7 +274,7 @@ class HTAO(HModule):
         return Batch.with_x(self.tree(inputs.x))
 
     def update_local(self, ctx: UpdateContext):
-        h_tao = _HierarchicalTAO(
+        h_tao = _CascadeTAO(
             xs=ctx.inputs.x,
             loss_fn=ctx.loss_fn,
             branch_builder=self.branch_builder,
@@ -284,7 +284,7 @@ class HTAO(HModule):
 
 
 @dataclass
-class _HierarchicalTAO(TAOBase):
+class _CascadeTAO(TAOBase):
     """
     A concrete subclass of TAOBase that implements TAO with leaves that get
     passed to the remainder of a network.
@@ -331,13 +331,13 @@ class _HierarchicalTAO(TAOBase):
         return self.loss_fn(sample_indices, Batch.with_x(outputs))
 
 
-class HSGD(HModule):
+class CascadeSGD(CascadeModule):
     """
     Wrap sub-modules to perform frequent gradient-based updates and less
     frequent recursive update() calls.
     """
 
-    def __init__(self, contained: HModule, interval: int, opt: optim.Optimizer):
+    def __init__(self, contained: CascadeModule, interval: int, opt: optim.Optimizer):
         super().__init__()
         self.contained = contained
         self.interval = interval

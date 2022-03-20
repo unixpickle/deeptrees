@@ -1,11 +1,10 @@
-from abc import abstractmethod
-from copy import deepcopy
+from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
 
 
-class Tree(nn.Module):
+class Tree(nn.Module, ABC):
     @abstractmethod
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         """
@@ -35,11 +34,11 @@ class TreeBranch(Tree):
         self.left = left
         self.right = right
 
+    @abstractmethod
     def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
-        result = deepcopy(self)
-        result.left = left
-        result.right = right
-        return result
+        """
+        Create a shallow copy of self with different children.
+        """
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         decisions = self.decision(xs)
@@ -70,6 +69,11 @@ class AxisTreeBranch(TreeBranch):
         self.axis = axis
         self.register_buffer("threshold", threshold)
 
+    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
+        return AxisTreeBranch(
+            left=left, right=right, axis=self.axis, threshold=self.threshold
+        )
+
     def decision(self, xs: torch.Tensor) -> torch.Tensor:
         return xs[:, self.axis] > self.threshold
 
@@ -81,6 +85,11 @@ class ObliqueTreeBranch(TreeBranch):
         super().__init__(left, right)
         self.register_buffer("coef", coef)
         self.register_buffer("threshold", threshold)
+
+    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
+        return ObliqueTreeBranch(
+            left=left, right=right, coef=self.coef, threshold=self.threshold
+        )
 
     def decision(self, xs: torch.Tensor) -> torch.Tensor:
         return (xs @ self.coef).view(-1) > self.threshold

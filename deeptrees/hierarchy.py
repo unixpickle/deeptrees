@@ -147,7 +147,7 @@ class HModule(nn.Module):
 
     def update(
         self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None
-    ):
+    ) -> torch.Tensor:
         """
         Update the parameters of the module and all its submodules given the
         inputs and loss function. Gradients will automatically be calculated
@@ -155,18 +155,28 @@ class HModule(nn.Module):
 
         This should be called once on the root module, since it will amortize
         the cost of running backpropagation throughout the model.
+
+        :param full_batch: a large batch of training examples.
+        :param loss_fn: the global loss function.
+        :param batch_size: if specified, split the batch up into minibatches
+                           during the initial forward/backward passes.
+        :return: a 1-D tensor of pre-update losses.
         """
         self._apply_hmodules(lambda x: x._preparing_for_update())
 
         # Propagate all of the samples to accumulate inputs, outputs, and
         # gradients at all of the nodes.
+        all_losses = []
         for indices, sub_batch in full_batch.batches(batch_size or len(full_batch)):
-            loss = loss_fn(indices, self(sub_batch)).sum()
-            loss.backward()
+            losses = loss_fn(indices, self(sub_batch))
+            all_losses.append(losses.detach())
+            losses.sum().backward()
 
         self._apply_hmodules(lambda x: x._updating())
         self._update(loss_fn)
         self._apply_hmodules(lambda x: x._completed_update())
+
+        return torch.cat(all_losses, dim=0)
 
     def _prepare_for_update(self):
         self._preparing_for_update = True

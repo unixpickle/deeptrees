@@ -41,9 +41,7 @@ class SklearnRegressionTreeBuilder(TreeBuilder):
         def tree_at_index(i: int) -> Tree:
             left_id, right_id = tree.children_left[i], tree.children_right[i]
             if left_id == right_id:
-                return ConstantTreeLeaf(
-                    torch.from_numpy(tree.value[i]).view(-1).float()
-                )
+                return ConstantTreeLeaf(torch.from_numpy(tree.value[i]).view(-1).to(xs))
             else:
                 return AxisTreeBranch(
                     left=tree_at_index(left_id),

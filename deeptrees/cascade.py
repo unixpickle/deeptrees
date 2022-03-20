@@ -29,7 +29,7 @@ class Batch:
     def cat(cls, elements: Sequence["Batch"], dim: int = 0) -> "Batch":
         joined = defaultdict(list)
         for element in elements:
-            for k, v in element.values.items():
+            for k, v in element.data.items():
                 joined[k].append(v)
         return cls({k: torch.cat(v, dim=dim) for k, v in joined.items()})
 
@@ -60,7 +60,7 @@ class Batch:
             )
 
     def __len__(self) -> int:
-        return len(next(self.data.values()))
+        return len(next(iter(self.data.values())))
 
 
 BatchLossFn = Callable[[torch.Tensor, Batch], torch.Tensor]
@@ -167,7 +167,7 @@ class CascadeModule(nn.Module):
                            during the initial forward/backward passes.
         :return: a 1-D tensor of pre-update losses.
         """
-        self._apply_cascade(lambda x: x._preparing_for_update())
+        self._apply_cascade(lambda x: x._prepare_for_update())
 
         # Propagate all of the samples to accumulate inputs, outputs, and
         # gradients at all of the nodes.
@@ -216,7 +216,7 @@ class CascadeModule(nn.Module):
         else:
             outputs, grads = None, None
 
-        self.update(
+        self.update_local(
             UpdateContext(
                 inputs=inputs,
                 loss_fn=loss_fn,
@@ -238,7 +238,7 @@ class CascadeSequential(CascadeModule):
     def evaluate(self, inputs: Batch) -> Batch:
         out = inputs
         for layer in self.sequence:
-            out = layer(inputs)
+            out = layer(out)
         return out
 
     def update_local(self, ctx: UpdateContext):
@@ -361,8 +361,9 @@ class CascadeSGD(CascadeModule):
     ) -> torch.Tensor:
         self.step.add_(1)
         if self.step.item() % self.interval == 0:
-            super().update(full_batch, loss_fn, batch_size=batch_size)
+            result = super().update(full_batch, loss_fn, batch_size=batch_size)
             self.optimizer.zero_grad()
+            return result
         else:
             self.optimizer.zero_grad()
             all_losses = []
@@ -372,3 +373,4 @@ class CascadeSGD(CascadeModule):
                 losses.mean().backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+            return torch.cat(all_losses, dim=0)

@@ -23,7 +23,7 @@ class CascadeNVPLayer(CascadeModule):
         output: Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor],
     ) -> Batch:
         out_vec, latents, log_det = output
-        result = dict(x=out_vec)
+        result = Batch.with_x(out_vec)
         result.update({k: v for k, v in x.items() if k not in ["x", "log_det"]})
         next_latent_id = next(i for i in itertools.count() if f"latent_{i}" not in x)
         for i, latent in enumerate(latents):
@@ -81,8 +81,8 @@ class CascadeNVPPartial(CascadeNVPLayer):
     def evaluate_nvp(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
-        predictions = self.sub_layer(x[:, self.feature_mask])
-        return self._output_for_predictions(x, predictions)
+        predictions = self.sub_layer(Batch.with_x(x[:, self.feature_mask]))
+        return self._output_for_predictions(x, predictions.x)
 
     def update_local(self, ctx: UpdateContext):
         def loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
@@ -102,11 +102,11 @@ class CascadeNVPPartial(CascadeNVPLayer):
         output[:, ~self.feature_mask] = (
             x[:, ~self.feature_mask] * log_scale.exp() + bias
         )
-        return output, [], log_scale.flatten(1).sum()
+        return output, [], log_scale.flatten(1).sum(1)
 
 
-def quantization_noise(b: Batch, noise_level=1.0 / 255.0) -> Batch:
-    return Batch.with_x(b.x + torch.rand_like(b.x) * noise_level)
+def quantization_noise(b: torch.Tensor, noise_level=1.0 / 255.0) -> torch.Tensor:
+    return b + torch.rand_like(b) * noise_level
 
 
 def nvp_loss(
@@ -114,7 +114,7 @@ def nvp_loss(
 ) -> torch.Tensor:
     _ = indices  # this is self-supervised learning, so we have no targets
     log_det = batch.get("log_det", 0.0)
-    latents = [batch.x]
+    latents = [batch.x.flatten(1)]
     for i in itertools.count():
         k = f"latent_{i}"
         if k not in batch:
@@ -124,7 +124,7 @@ def nvp_loss(
     total_loss = log_det
     numel = 0
     for latent in latents:
-        numel += latent[0].numel
+        numel += latent.shape[1]
         log_probs = Normal(0, 1).log_prob(latent)
-        total_loss = total_loss + log_probs.flatten(1).sum(1)
-    return ((total_loss / numel) + math.log(noise_level)) / math.log(2.0)
+        total_loss = total_loss + log_probs.sum(1)
+    return -((total_loss / numel) + math.log(noise_level)) / math.log(2.0)

@@ -3,7 +3,7 @@ from typing import Sequence
 
 import torch
 
-from .cascade import CascadeSequential, CascadeTAO
+from .cascade import Batch, CascadeSequential, CascadeTAO
 from .cascade_nvp import CascadeNVPPartial
 from .fit_base import TreeBranchBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
@@ -48,22 +48,19 @@ def initialize_tao_nvp(
     cur_data = xs
     layers = []
     for _ in range(num_layers // 2):
-        mask = torch.zeros(in_size, dtype=torch.bool, device=xs.device)
-        mask[torch.randperm(in_size, device=mask.device)[: in_size // 2]] = True
-        tree = random_tree(cur_data[:, mask], in_size, tree_depth, constant_leaf=True)
-        layers.append(
-            CascadeNVPPartial(
+        sep = torch.zeros(in_size, dtype=torch.bool, device=xs.device)
+        sep[torch.randperm(in_size, device=sep.device)[: in_size // 2]] = True
+
+        for mask in [sep, ~sep]:
+            out_size = 2 * (~mask).long().sum().item()
+            tree = random_tree(
+                cur_data[:, mask], out_size, tree_depth, constant_leaf=True
+            )
+            layer = CascadeNVPPartial(
                 mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
             )
-        )
-        cur_data = tree(cur_data)
-        tree = random_tree(cur_data[:, ~mask], in_size, tree_depth, constant_leaf=True)
-        layers.append(
-            CascadeNVPPartial(
-                ~mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
-            )
-        )
-        cur_data = tree(cur_data)
+            layers.append(layer)
+            cur_data = layer(Batch.with_x(cur_data)).x
     return CascadeSequential(layers)
 
 

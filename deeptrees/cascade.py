@@ -12,14 +12,11 @@ from .tao import TAOBase, TAOResult
 from .tree import Tree, TreeBranch, TreeLeaf
 
 
-@dataclass
-class Batch:
+class Batch(dict):
     """
     A dict of tensors where each tensor should have the same length along the
     first axis.
     """
-
-    data: Dict[str, torch.Tensor]
 
     @classmethod
     def with_x(cls, x: torch.Tensor) -> "Batch":
@@ -29,25 +26,25 @@ class Batch:
     def cat(cls, elements: Sequence["Batch"], dim: int = 0) -> "Batch":
         joined = defaultdict(list)
         for element in elements:
-            for k, v in element.data.items():
+            for k, v in element.items():
                 joined[k].append(v)
         return cls({k: torch.cat(v, dim=dim) for k, v in joined.items()})
 
     @property
     def x(self) -> torch.Tensor:
-        return self.data["x"]
+        return self["x"]
 
     def detach(self) -> "Batch":
-        return Batch({k: v.detach() for k, v in self.data.items()})
+        return Batch({k: v.detach() for k, v in self.items()})
 
     def clone(self) -> "Batch":
-        return Batch({k: v.clone() for k, v in self.data.items()})
+        return Batch({k: v.clone() for k, v in self.items()})
 
     def force_requires_grad(self) -> "Batch":
         return Batch(
             {
                 k: v if v.requires_grad else v.detach().requires_grad_()
-                for k, v in self.data.items()
+                for k, v in self.items()
             }
         )
 
@@ -56,11 +53,11 @@ class Batch:
         indices = torch.arange(size)
         for i in range(0, size, batch_size):
             yield indices[i : i + batch_size], Batch(
-                {k: v[i : i + batch_size] for k, v in self.data.items()}
+                {k: v[i : i + batch_size] for k, v in self.items()}
             )
 
     def __len__(self) -> int:
-        return len(next(iter(self.data.values())))
+        return len(next(iter(self.values())))
 
 
 BatchLossFn = Callable[[torch.Tensor, Batch], torch.Tensor]
@@ -124,9 +121,7 @@ class CascadeModule(nn.Module, ABC):
                 )
                 return grad_outputs
 
-        return Batch(
-            dict(zip(out.data.keys(), _CacheGradFunc.apply(out.data.values())))
-        )
+        return Batch(dict(zip(out.keys(), _CacheGradFunc.apply(out.values()))))
 
     def requires_output_grad(self) -> bool:
         """

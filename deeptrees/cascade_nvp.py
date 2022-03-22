@@ -17,13 +17,11 @@ class CascadeNVPLayer(CascadeModule):
     def evaluate(self, x: Batch) -> Batch:
         out_vec, latents, log_det = self.evaluate_nvp(x.x)
         result = dict(x=out_vec)
-        result.update({k: v for k, v in x.data.items() if k not in ["x", "log_det"]})
-        next_latent_id = next(
-            i for i in itertools.count() if f"latent_{i}" not in x.data
-        )
+        result.update({k: v for k, v in x.items() if k not in ["x", "log_det"]})
+        next_latent_id = next(i for i in itertools.count() if f"latent_{i}" not in x)
         for i, latent in enumerate(latents):
             result[f"latent_{i+next_latent_id}"] = latent
-        result["log_det"] = x.data.get("log_det", 0.0) + log_det
+        result["log_det"] = x.get("log_det", 0.0) + log_det
         return result
 
     @abstractmethod
@@ -73,9 +71,9 @@ def nvp_loss(
     latents = [batch.x]
     for i in itertools.count():
         k = f"latent_{i}"
-        if k not in batch.data:
+        if k not in batch:
             break
-        latents.append(batch.data[k].flatten(1))
+        latents.append(batch[k].flatten(1))
 
     total_loss = log_det
     numel = 0

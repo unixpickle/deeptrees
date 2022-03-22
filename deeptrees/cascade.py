@@ -175,6 +175,7 @@ class CascadeModule(nn.Module, ABC):
             all_losses.append(losses.detach())
             losses.sum().backward()
 
+        torch.cuda.empty_cache()
         total = 0
         for name, module in self.named_modules():
             if hasattr(module, "_cached_inputs"):

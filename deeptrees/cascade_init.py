@@ -4,6 +4,7 @@ from typing import Sequence
 import torch
 
 from .cascade import CascadeSequential, CascadeTAO
+from .cascade_nvp import CascadeNVPPartial
 from .fit_base import TreeBranchBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
 
@@ -28,13 +29,51 @@ def initialize_tao_dense(
     return CascadeSequential(layers)
 
 
+def initialize_tao_nvp(
+    xs: torch.Tensor,
+    layers: int,
+    tree_depth: int,
+    branch_builder: TreeBranchBuilder,
+    **tao_kwargs,
+) -> CascadeSequential:
+    """
+    Initialize a cascaded RealNVP-like model as a series of CascadeNVPPartial
+    layers, where each layer contains a TAO module with constant output leaves.
+    """
+    in_size = xs.shape[1]
+    assert in_size % 2 == 0, "must operate on an even number of features"
+    assert (
+        layers % 2 == 0
+    ), "must have even number of layers for fair distribution of masks"
+    cur_data = xs
+    layers = []
+    for _ in range(layers // 2):
+        mask = torch.zeros(in_size).to(xs.device)
+        mask[torch.randperm(in_size)[: in_size // 2]] = True
+        tree = random_tree(cur_data[:, mask], in_size, tree_depth, constant_leaf=True)
+        layers.append(
+            CascadeNVPPartial(
+                mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
+            )
+        )
+        cur_data = tree(cur_data)
+        tree = random_tree(cur_data[:, ~mask], in_size, tree_depth, constant_leaf=True)
+        layers.append(
+            CascadeNVPPartial(
+                ~mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
+            )
+        )
+        cur_data = tree(cur_data)
+    return CascadeSequential(layers)
+
+
 def random_tree(
     xs: torch.Tensor, out_size: int, depth: int, constant_leaf: bool = False
 ) -> Tree:
     in_size = xs.shape[1]
     if depth == 0:
         if constant_leaf:
-            return ConstantTreeLeaf(torch.randn(out_size).to(xs))
+            return ConstantTreeLeaf(torch.zeros(out_size).to(xs))
         else:
             return LinearTreeLeaf(
                 coef=torch.randn(size=(in_size, out_size)).to(xs) / math.sqrt(in_size),

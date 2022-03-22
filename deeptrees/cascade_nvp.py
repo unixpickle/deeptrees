@@ -15,7 +15,7 @@ class CascadeNVPLayer(CascadeModule):
     """
 
     def evaluate(self, x: Batch) -> Batch:
-        return self._results_batch(self.evaluate_nvp(x.x))
+        return self._results_batch(x, self.evaluate_nvp(x.x))
 
     def _results_batch(
         self,
@@ -73,14 +73,15 @@ class CascadeNVPPartial(CascadeNVPLayer):
     actual scale/shift parameters.
     """
 
-    def __init__(self, index_mask: torch.Tensor, sub_layer: CascadeModule):
-        self.register_buffer("index_mask", index_mask)
+    def __init__(self, feature_mask: torch.Tensor, sub_layer: CascadeModule):
+        super().__init__()
+        self.register_buffer("feature_mask", feature_mask)
         self.sub_layer = sub_layer
 
     def evaluate_nvp(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
-        predictions = self.sub_layer(x[:, self.index_mask])
+        predictions = self.sub_layer(x[:, self.feature_mask])
         return self._output_for_predictions(x, predictions)
 
     def update_local(self, ctx: UpdateContext):
@@ -97,8 +98,10 @@ class CascadeNVPPartial(CascadeNVPLayer):
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
         log_scale, bias = torch.split(predictions, predictions.shape[1] // 2, dim=1)
         output = torch.zeros_like(x)
-        output[:, self.index_mask] = x[:, self.index_mask]
-        output[:, ~self.index_mask] = x[:, ~self.index_mask] * log_scale.exp() + bias
+        output[:, self.feature_mask] = x[:, self.feature_mask]
+        output[:, ~self.feature_mask] = (
+            x[:, ~self.feature_mask] * log_scale.exp() + bias
+        )
         return output, [], log_scale.flatten(1).sum()
 
 

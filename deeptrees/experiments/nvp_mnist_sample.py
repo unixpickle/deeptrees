@@ -16,7 +16,7 @@ def main():
         model = torch.load(f, map_location="cpu")
 
     d = 28
-    samples = model.invert(torch.randn(args.grid_size, d ** 2), [])
+    samples = model.invert(torch.randn(args.grid_size ** 2, d ** 2), [])
     samples = (samples * 255).clamp(0, 255).round().to(torch.uint8).cpu().numpy()
     samples = samples.reshape([args.grid_size, args.grid_size, d, d, 1])
     samples = samples.transpose(0, 2, 1, 3, 4)

@@ -175,6 +175,16 @@ class CascadeModule(nn.Module, ABC):
             all_losses.append(losses.detach())
             losses.sum().backward()
 
+        total = 0
+        for name, module in self.named_modules():
+            if hasattr(module, "_cached_inputs"):
+                sub_total = sum(
+                    sum(v.numel() for v in x.items()) for x in module._cached_inputs
+                )
+                print("name", name, sub_total)
+                total += sub_total
+        print("total memory used by intermediates", total)
+
         self._apply_cascade(lambda x: x._updating())
         self._update(loss_fn)
         self._apply_cascade(lambda x: x._completed_update())

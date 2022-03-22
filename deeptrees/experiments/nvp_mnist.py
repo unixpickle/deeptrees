@@ -46,15 +46,11 @@ def main():
 
     print("training...")
     for epoch in itertools.count():
-        indices = torch.randperm(len(xs))
-        bs = 20000
-        for i in range(0, len(indices), bs):
-            sub_xs = xs[indices[i : i + bs]]
-            losses = sgd_model.update(
-                full_batch=Batch.with_x(quantization_noise(sub_xs)),
-                loss_fn=nvp_loss,
-                batch_size=1024,
-            )
+        losses = sgd_model.update(
+            full_batch=Batch.with_x(quantization_noise(xs)),
+            loss_fn=nvp_loss,
+            batch_size=1024,
+        )
         with torch.no_grad():
             test_out = sgd_model(Batch.with_x(test_xs))
             test_losses = nvp_loss(None, test_out)

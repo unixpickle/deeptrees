@@ -186,7 +186,6 @@ class CascadeModule(nn.Module, ABC):
                     sum(v.numel() for v in x.values()) for x in module._cached_inputs
                 )
                 print("name", name, sub_total)
-                print([[v.dtype for v in x.values()] for x in module._cached_inputs])
                 total += sub_total
         print("total memory used by intermediates", total)
         t = torch.cuda.get_device_properties(0).total_memory
@@ -224,7 +223,11 @@ class CascadeModule(nn.Module, ABC):
         self,
         loss_fn: BatchLossFn,
     ):
+        print(f"---update {type(self)}---")
+        print("allocated memory", torch.cuda.memory_allocated(0))
         inputs = Batch.cat(self._cached_inputs, dim=0)
+        print("after cat", torch.cuda.memory_allocated(0))
+
         if self.requires_output_grad():
             outputs = Batch.cat(self._cached_outputs, dim=0)
             grads = Batch.cat(self._cached_grads, dim=0)

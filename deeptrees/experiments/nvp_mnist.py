@@ -35,7 +35,7 @@ def main():
     print("initializing TAO model...")
     model = initialize_tao_nvp(
         xs=xs,
-        num_layers=10,
+        num_layers=16,
         tree_depth=3,
         branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
     )

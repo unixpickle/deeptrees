@@ -179,7 +179,7 @@ class CascadeModule(nn.Module, ABC):
         for name, module in self.named_modules():
             if hasattr(module, "_cached_inputs"):
                 sub_total = sum(
-                    sum(v.numel() for v in x.items()) for x in module._cached_inputs
+                    sum(v.numel() for v in x.values()) for x in module._cached_inputs
                 )
                 print("name", name, sub_total)
                 total += sub_total

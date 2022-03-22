@@ -31,7 +31,7 @@ def initialize_tao_dense(
 
 def initialize_tao_nvp(
     xs: torch.Tensor,
-    layers: int,
+    num_layers: int,
     tree_depth: int,
     branch_builder: TreeBranchBuilder,
     **tao_kwargs,
@@ -43,13 +43,13 @@ def initialize_tao_nvp(
     in_size = xs.shape[1]
     assert in_size % 2 == 0, "must operate on an even number of features"
     assert (
-        layers % 2 == 0
+        num_layers % 2 == 0
     ), "must have even number of layers for fair distribution of masks"
     cur_data = xs
     layers = []
-    for _ in range(layers // 2):
-        mask = torch.zeros(in_size).to(xs.device)
-        mask[torch.randperm(in_size)[: in_size // 2]] = True
+    for _ in range(num_layers // 2):
+        mask = torch.zeros(in_size, dtype=torch.bool, device=xs.device)
+        mask[torch.randperm(in_size, device=mask.device)[: in_size // 2]] = True
         tree = random_tree(cur_data[:, mask], in_size, tree_depth, constant_leaf=True)
         layers.append(
             CascadeNVPPartial(

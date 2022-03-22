@@ -69,7 +69,7 @@ class CascadeNVPPaddedLogit(CascadeNVPLayer):
 class CascadeNVPPartial(CascadeNVPLayer):
     """
     A layer that uses a subset of features to predict the scale and shift
-    parameters for the remaining features. Wraps a sub-layer that does the
+    parameters for the remaining features. Wraps a sub-layer that computes the
     actual scale/shift parameters.
     """
 

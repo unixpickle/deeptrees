@@ -5,7 +5,7 @@ import torch
 
 from .cascade import CascadeSequential, CascadeTAO
 from .fit_base import TreeBranchBuilder
-from .tree import LinearTreeLeaf, ObliqueTreeBranch, Tree
+from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
 
 
 def initialize_tao_dense(
@@ -22,26 +22,35 @@ def initialize_tao_dense(
     cur_data = xs
     layers = []
     for out_size in hidden_sizes:
-        tree = _random_tree(cur_data, out_size, tree_depth)
+        tree = random_tree(cur_data, out_size, tree_depth)
         cur_data = tree(cur_data)
         layers.append(CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs))
     return CascadeSequential(layers)
 
 
-def _random_tree(xs: torch.Tensor, out_size: int, depth: int) -> Tree:
+def random_tree(
+    xs: torch.Tensor, out_size: int, depth: int, constant_leaf: bool = False
+) -> Tree:
     in_size = xs.shape[1]
     if depth == 0:
-        return LinearTreeLeaf(
-            coef=torch.randn(size=(in_size, out_size)).to(xs) / math.sqrt(in_size),
-            bias=torch.zeros(out_size).to(xs),
-        )
+        if constant_leaf:
+            return ConstantTreeLeaf(torch.randn(out_size).to(xs))
+        else:
+            return LinearTreeLeaf(
+                coef=torch.randn(size=(in_size, out_size)).to(xs) / math.sqrt(in_size),
+                bias=torch.zeros(out_size).to(xs),
+            )
     split_direction = torch.randn(in_size).to(xs)
     dots = (xs @ split_direction).view(-1)
     threshold = dots.median()
     decision = dots > threshold
     return ObliqueTreeBranch(
-        left=_random_tree(xs[~decision], out_size, depth - 1),
-        right=_random_tree(xs[decision], out_size, depth - 1),
+        left=random_tree(
+            xs[~decision], out_size, depth - 1, constant_leaf=constant_leaf
+        ),
+        right=random_tree(
+            xs[decision], out_size, depth - 1, constant_leaf=constant_leaf
+        ),
         coef=split_direction,
         threshold=threshold,
     )

@@ -76,8 +76,7 @@ def main():
 
         if (epoch + 1) % SAVE_INTERVAL == 0:
             print("saving model...")
-            with open(os.path.join(OUTPUT_DIR, "model.pkl"), "wb") as f:
-                pickle.dump(model, f)
+            torch.save(model, os.path.join(OUTPUT_DIR, "model.pkl"))
 
 
 if __name__ == "__main__":

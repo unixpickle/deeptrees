@@ -99,7 +99,7 @@ class CascadeModule(nn.Module, ABC):
         out = self.evaluate(inputs)
 
         if self._preparing_for_update:
-            self._cached_inputs.append(inputs)
+            self._cached_inputs.append(inputs.detach())
 
         if not (self._preparing_for_update and self.requires_output_grad()):
             return out

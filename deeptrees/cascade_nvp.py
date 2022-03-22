@@ -95,6 +95,7 @@ class CascadeNVPPartial(CascadeNVPLayer):
         super().__init__()
         self.register_buffer("feature_mask", feature_mask)
         self.sub_layer = sub_layer
+        self.sub_layer._no_cache_inputs = True
 
     def evaluate_nvp(
         self, x: torch.Tensor
@@ -114,7 +115,9 @@ class CascadeNVPPartial(CascadeNVPLayer):
             out_batch = self._results_batch(sub_batch, out_tuple)
             return ctx.loss_fn(indices, out_batch)
 
-        self.sub_layer._update(loss_fn)
+        self.sub_layer._update(
+            loss_fn, inputs=Batch.with_x(ctx.inputs.x[:, self.feature_mask])
+        )
 
     def _output_for_predictions(
         self, x: torch.Tensor, predictions: torch.Tensor, inverse: bool = False

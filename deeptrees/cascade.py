@@ -94,6 +94,7 @@ class CascadeModule(nn.Module, ABC):
         self._cached_inputs = []
         self._cached_outputs = []
         self._cached_grads = []
+        self._no_cache_inputs = False
 
     def forward(self, inputs: Batch) -> Batch:
         out = self.evaluate(inputs)
@@ -202,11 +203,17 @@ class CascadeModule(nn.Module, ABC):
     def _update(
         self,
         loss_fn: BatchLossFn,
+        inputs: Optional[Batch] = None,
     ):
-        inputs = Batch.cat(self._cached_inputs, dim=0)
+        assert (inputs is not None) == self._no_cache_inputs
+        if inputs is None:
+            inputs = Batch.cat(self._cached_inputs, dim=0)
+        self._cached_inputs = []
         if self.requires_output_grad():
             outputs = Batch.cat(self._cached_outputs, dim=0)
+            self._cached_outputs = []
             grads = Batch.cat(self._cached_grads, dim=0)
+            self._cached_grads = []
             assert len(inputs) == len(outputs), "invalid sample count fed through model"
             assert len(outputs) == len(
                 grads
@@ -222,9 +229,6 @@ class CascadeModule(nn.Module, ABC):
                 output_grads=grads,
             )
         )
-
-        # Empty the cached variables.
-        self._completed_update()
 
 
 class CascadeSequential(CascadeModule):

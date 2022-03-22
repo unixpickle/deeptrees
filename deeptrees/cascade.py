@@ -223,6 +223,9 @@ class CascadeModule(nn.Module, ABC):
             )
         )
 
+        # Empty the cached variables.
+        self._completed_update()
+
 
 class CascadeSequential(CascadeModule):
     """

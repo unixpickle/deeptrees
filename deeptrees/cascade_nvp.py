@@ -6,7 +6,7 @@ from typing import Sequence, Tuple
 import torch
 from torch.distributions.normal import Normal
 
-from .cascade import Batch, CascadeModule, UpdateContext
+from .cascade import Batch, CascadeModule, CascadeTAO, UpdateContext
 
 
 class CascadeNVPLayer(CascadeModule):
@@ -15,7 +15,14 @@ class CascadeNVPLayer(CascadeModule):
     """
 
     def evaluate(self, x: Batch) -> Batch:
-        out_vec, latents, log_det = self.evaluate_nvp(x.x)
+        return self._results_batch(self.evaluate_nvp(x.x))
+
+    def _results_batch(
+        self,
+        x: Batch,
+        output: Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor],
+    ) -> Batch:
+        out_vec, latents, log_det = output
         result = dict(x=out_vec)
         result.update({k: v for k, v in x.items() if k not in ["x", "log_det"]})
         next_latent_id = next(i for i in itertools.count() if f"latent_{i}" not in x)
@@ -59,7 +66,43 @@ class CascadeNVPPaddedLogit(CascadeNVPLayer):
         _ = ctx
 
 
-def apply_noise(b: Batch, noise_level=1.0 / 255.0) -> Batch:
+class CascadeNVPPartial(CascadeNVPLayer):
+    """
+    A layer that uses a subset of features to predict the scale and shift
+    parameters for the remaining features. Wraps a sub-layer that does the
+    actual scale/shift parameters.
+    """
+
+    def __init__(self, index_mask: torch.Tensor, sub_layer: CascadeModule):
+        self.register_buffer("index_mask", index_mask)
+        self.sub_layer = sub_layer
+
+    def evaluate_nvp(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        predictions = self.sub_layer(x[:, self.index_mask])
+        return self._output_for_predictions(x, predictions)
+
+    def update_local(self, ctx: UpdateContext):
+        def loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+            sub_batch = ctx.inputs.at_indices(indices)
+            out_tuple = self._output_for_predictions(sub_batch.x, outputs.x)
+            out_batch = self._results_batch(sub_batch, out_tuple)
+            return ctx.loss_fn(indices, out_batch)
+
+        self.sub_layer._update(loss_fn)
+
+    def _output_for_predictions(
+        self, x: torch.Tensor, predictions: torch.Tensor
+    ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        log_scale, bias = torch.split(predictions, predictions.shape[1] // 2, dim=1)
+        output = torch.zeros_like(x)
+        output[:, self.index_mask] = x[:, self.index_mask]
+        output[:, ~self.index_mask] = x[:, ~self.index_mask] * log_scale.exp() + bias
+        return output, [], log_scale.flatten(1).sum()
+
+
+def quantization_noise(b: Batch, noise_level=1.0 / 255.0) -> Batch:
     return Batch.with_x(b.x + torch.rand_like(b.x) * noise_level)
 
 

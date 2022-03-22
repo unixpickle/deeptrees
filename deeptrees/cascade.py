@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple
+from typing import Callable, Iterator, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -39,6 +39,9 @@ class Batch(dict):
 
     def clone(self) -> "Batch":
         return Batch({k: v.clone() for k, v in self.items()})
+
+    def at_indices(self, indices: torch.Tensor) -> "Batch":
+        return Batch({k: v[indices] for k, v in self.items()})
 
     def force_requires_grad(self) -> "Batch":
         return Batch(

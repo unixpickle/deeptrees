@@ -1,18 +1,22 @@
 import itertools
+import math
 import os
 import pickle
 
+import numpy as np
 import torch
 import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeSGD
 from deeptrees.cascade_init import initialize_tao_nvp
-from deeptrees.cascade_nvp import nvp_loss, quantization_noise
+from deeptrees.cascade_nvp import latents_from_batch, nvp_loss, quantization_noise
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
+from PIL import Image
 from torchvision.datasets.mnist import MNIST
 
 OUTPUT_DIR = "./models_nvp_mnist"
 SAVE_INTERVAL = 10
+GRID_SIZE = 32
 
 
 def main():
@@ -54,8 +58,24 @@ def main():
             f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_losses.mean().item():.05}"
         )
         if (epoch + 1) % SAVE_INTERVAL == 0:
+            print("saving model...")
             with open(os.path.join(OUTPUT_DIR, "model.pkl"), "wb") as f:
                 pickle.dump(model, f)
+            print("producing samples...")
+            with torch.no_grad():
+                out_batch = model(Batch.with_x(test_xs[: GRID_SIZE ** 2]))
+                latents = [torch.randn_like(x) for x in latents_from_batch(out_batch)]
+                samples = model.invert(torch.randn_like(out_batch.x), latents)
+                samples = (
+                    (samples * 255).clamp(0, 255).round().to(torch.uint8).cpu().numpy()
+                )
+                d = round(math.sqrt(samples.shape[1]))
+                samples = samples.reshape([GRID_SIZE, GRID_SIZE, d, d, 1])
+                samples = samples.transpose(0, 2, 1, 3, 4)
+                samples = samples.reshape([GRID_SIZE * d, GRID_SIZE * d, 1])
+                Image.fromarray(np.tile(samples, [1, 1, 3])).save(
+                    os.path.join(OUTPUT_DIR, "samples.png")
+                )
 
 
 if __name__ == "__main__":

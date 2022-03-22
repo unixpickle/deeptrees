@@ -1,12 +1,12 @@
 import itertools
 import math
 from abc import abstractmethod
-from typing import Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import torch
 from torch.distributions.normal import Normal
 
-from .cascade import Batch, CascadeModule, CascadeTAO, UpdateContext
+from .cascade import Batch, CascadeModule, CascadeSequential, UpdateContext
 
 
 class CascadeNVPLayer(CascadeModule):
@@ -38,11 +38,25 @@ class CascadeNVPLayer(CascadeModule):
         """
         Evaluate the model on the input x.
 
+        :param x: the input tensor from the previous layer.
         :return: a tuple (outputs, latents, log_det).
                  - outputs: the output latent of the layer to be sent downstream.
                  - latents: zero or more split off latent variables.
                  - log_det: the log-determinant of the Jacobian of this layer.
         """
+
+    @abstractmethod
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        """
+        Compute the input x given the outputs and output latents.
+        """
+
+    @property
+    def num_latents(self) -> int:
+        """
+        Get the number of latents returned by evaluate_nvp().
+        """
+        return 0
 
 
 class CascadeNVPPaddedLogit(CascadeNVPLayer):
@@ -61,6 +75,10 @@ class CascadeNVPPaddedLogit(CascadeNVPLayer):
         logits = (y / (1 - y)).log()
         log_dets = (1 / y + 1 / (1 - y)).log() + ((1 - 2 * self.alpha)).log()
         return logits, [], log_dets.flatten(1).sum(1)
+
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        assert not len(latents)
+        return (outputs.sigmoid() - self.alpha) / (1 - 2 * self.alpha)
 
     def update_local(self, ctx: UpdateContext):
         _ = ctx
@@ -84,6 +102,11 @@ class CascadeNVPPartial(CascadeNVPLayer):
         predictions = self.sub_layer(Batch.with_x(x[:, self.feature_mask]))
         return self._output_for_predictions(x, predictions.x)
 
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        assert not len(latents)
+        predictions = self.sub_layer(Batch.with_x(outputs[:, self.feature_mask]))
+        return self._output_for_predictions(outputs, predictions.x, inverse=True)[0]
+
     def update_local(self, ctx: UpdateContext):
         def loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
             sub_batch = ctx.inputs.at_indices(indices)
@@ -94,15 +117,46 @@ class CascadeNVPPartial(CascadeNVPLayer):
         self.sub_layer._update(loss_fn)
 
     def _output_for_predictions(
-        self, x: torch.Tensor, predictions: torch.Tensor
+        self, x: torch.Tensor, predictions: torch.Tensor, inverse: bool = False
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
         log_scale, bias = torch.split(predictions, predictions.shape[1] // 2, dim=1)
         output = torch.zeros_like(x)
         output[:, self.feature_mask] = x[:, self.feature_mask]
-        output[:, ~self.feature_mask] = (
-            x[:, ~self.feature_mask] * log_scale.exp() + bias
-        )
+        if inverse:
+            output[:, ~self.feature_mask] = (x[:, ~self.feature_mask] - bias) * (
+                -log_scale
+            ).exp()
+        else:
+            output[:, ~self.feature_mask] = (
+                x[:, ~self.feature_mask] * log_scale.exp() + bias
+            )
         return output, [], log_scale.flatten(1).sum(1)
+
+
+class CascadeNVPSequential(CascadeNVPLayer, CascadeSequential):
+    def evaluate_nvp(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        out = Batch.with_x(x)
+        for layer in self.sequence:
+            out = layer(out)
+        return out.x, latents_from_batch(out), out["log_det"]
+
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        latent_stack = list(latents)
+        for layer in self.sequence[::-1]:
+            sub_latents = []
+            if layer.num_latents:
+                assert len(latent_stack) >= layer.num_latents
+                sub_latents = latent_stack[-layer.num_latents :]
+                del latent_stack[-layer.num_latents :]
+            outputs = layer.invert(outputs, sub_latents)
+        assert len(latent_stack) == 0
+        return outputs
+
+    @property
+    def num_latents(self) -> int:
+        return sum(x.num_latents for x in self.sequence)
 
 
 def quantization_noise(b: torch.Tensor, noise_level=1.0 / 255.0) -> torch.Tensor:
@@ -114,12 +168,7 @@ def nvp_loss(
 ) -> torch.Tensor:
     _ = indices  # this is self-supervised learning, so we have no targets
     log_det = batch.get("log_det", 0.0)
-    latents = [batch.x.flatten(1)]
-    for i in itertools.count():
-        k = f"latent_{i}"
-        if k not in batch:
-            break
-        latents.append(batch[k].flatten(1))
+    latents = [batch.x.flatten(1)] + [x.flatten(1) for x in latents_from_batch(batch)]
 
     total_loss = log_det
     numel = 0
@@ -128,3 +177,13 @@ def nvp_loss(
         log_probs = Normal(0, 1).log_prob(latent)
         total_loss = total_loss + log_probs.sum(1)
     return -((total_loss / numel) + math.log(noise_level)) / math.log(2.0)
+
+
+def latents_from_batch(batch: Batch) -> List[torch.Tensor]:
+    result = []
+    for i in itertools.count():
+        k = f"latent_{i}"
+        if k not in batch:
+            break
+        result.append(batch[k])
+    return result

@@ -4,7 +4,7 @@ from typing import Sequence
 import torch
 
 from .cascade import Batch, CascadeSequential, CascadeTAO
-from .cascade_nvp import CascadeNVPPartial
+from .cascade_nvp import CascadeNVPPartial, CascadeNVPSequential
 from .fit_base import TreeBranchBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
 
@@ -37,7 +37,7 @@ def initialize_tao_nvp(
     **tao_kwargs,
 ) -> CascadeSequential:
     """
-    Initialize a cascaded RealNVP-like model as a series of CascadeNVPPartial
+    Initialize a cascaded RealNVP-like model as a sequence of CascadeNVPPartial
     layers, where each layer contains a TAO module with constant output leaves.
     """
     in_size = xs.shape[1]
@@ -61,7 +61,7 @@ def initialize_tao_nvp(
             )
             layers.append(layer)
             cur_data = layer(Batch.with_x(cur_data)).x
-    return CascadeSequential(layers)
+    return CascadeNVPSequential(layers)
 
 
 def random_tree(

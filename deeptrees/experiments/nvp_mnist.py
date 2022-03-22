@@ -35,12 +35,12 @@ def main():
     print("initializing TAO model...")
     model = initialize_tao_nvp(
         xs=xs,
-        num_layers=10,
+        num_layers=20,
         tree_depth=3,
         branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
     )
     sgd_model = CascadeSGD(
-        model, interval=5, opt=optim.Adam(model.parameters(), lr=1e-3)
+        model, interval=2, opt=optim.Adam(model.parameters(), lr=1e-3)
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 

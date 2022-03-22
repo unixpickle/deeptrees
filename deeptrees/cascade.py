@@ -185,6 +185,12 @@ class CascadeModule(nn.Module, ABC):
                 print("name", name, sub_total)
                 total += sub_total
         print("total memory used by intermediates", total)
+        t = torch.cuda.get_device_properties(0).total_memory
+        r = torch.cuda.memory_reserved(0)
+        a = torch.cuda.memory_allocated(0)
+        print("total memory", t)
+        print("reserved memory", r)
+        print("allocated memory", a)
 
         self._apply_cascade(lambda x: x._updating())
         self._update(loss_fn)

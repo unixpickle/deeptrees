@@ -95,20 +95,17 @@ class CascadeNVPPartial(CascadeNVPLayer):
         super().__init__()
         self.register_buffer("feature_mask", feature_mask)
         self.sub_layer = sub_layer
+        self.sub_layer._no_cache_inputs = True
 
     def evaluate_nvp(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
-        predictions = self.sub_layer(
-            Batch.with_x(x[:, self.feature_mask]), cache_inputs=False
-        )
+        predictions = self.sub_layer(Batch.with_x(x[:, self.feature_mask]))
         return self._output_for_predictions(x, predictions.x)
 
     def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
         assert not len(latents)
-        predictions = self.sub_layer(
-            Batch.with_x(outputs[:, self.feature_mask]), cache_inputs=False
-        )
+        predictions = self.sub_layer(Batch.with_x(outputs[:, self.feature_mask]))
         return self._output_for_predictions(outputs, predictions.x, inverse=True)[0]
 
     def update_local(self, ctx: UpdateContext):

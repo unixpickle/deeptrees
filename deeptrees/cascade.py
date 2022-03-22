@@ -176,6 +176,9 @@ class CascadeModule(nn.Module, ABC):
             losses.sum().backward()
 
         torch.cuda.empty_cache()
+        import gc
+
+        gc.collect()
         total = 0
         for name, module in self.named_modules():
             if hasattr(module, "_cached_inputs"):
@@ -183,6 +186,7 @@ class CascadeModule(nn.Module, ABC):
                     sum(v.numel() for v in x.values()) for x in module._cached_inputs
                 )
                 print("name", name, sub_total)
+                print([[v.dtype for v in x.values()] for x in module._cached_inputs])
                 total += sub_total
         print("total memory used by intermediates", total)
         t = torch.cuda.get_device_properties(0).total_memory

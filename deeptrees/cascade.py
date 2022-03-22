@@ -94,12 +94,11 @@ class CascadeModule(nn.Module, ABC):
         self._cached_inputs = []
         self._cached_outputs = []
         self._cached_grads = []
-        self._no_cache_inputs = False
 
-    def forward(self, inputs: Batch) -> Batch:
+    def forward(self, inputs: Batch, cache_inputs: bool = True) -> Batch:
         out = self.evaluate(inputs)
 
-        if self._preparing_for_update:
+        if self._preparing_for_update and cache_inputs:
             self._cached_inputs.append(inputs)
 
         if not (self._preparing_for_update and self.requires_output_grad()):
@@ -205,7 +204,6 @@ class CascadeModule(nn.Module, ABC):
         loss_fn: BatchLossFn,
         inputs: Optional[Batch] = None,
     ):
-        assert (inputs is not None) == self._no_cache_inputs
         if inputs is None:
             inputs = Batch.cat(self._cached_inputs, dim=0)
         self._cached_inputs = []

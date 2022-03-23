@@ -14,6 +14,7 @@ def initialize_tao_dense(
     hidden_sizes: Sequence[int],
     tree_depth: int,
     branch_builder: TreeBranchBuilder,
+    random_prob: float = 0.0,
     **tao_kwargs,
 ) -> CascadeSequential:
     """
@@ -23,7 +24,7 @@ def initialize_tao_dense(
     cur_data = xs
     layers = []
     for out_size in hidden_sizes:
-        tree = random_tree(cur_data, out_size, tree_depth)
+        tree = random_tree(cur_data, out_size, tree_depth, random_prob=random_prob)
         cur_data = tree(cur_data)
         layers.append(CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs))
     return CascadeSequential(layers)
@@ -34,6 +35,7 @@ def initialize_tao_nvp(
     num_layers: int,
     tree_depth: int,
     branch_builder: TreeBranchBuilder,
+    random_prob: float = 0.0,
     **tao_kwargs,
 ) -> CascadeSequential:
     """
@@ -54,7 +56,11 @@ def initialize_tao_nvp(
         for mask in [sep, ~sep]:
             out_size = 2 * (~mask).long().sum().item()
             tree = random_tree(
-                cur_data[:, mask], out_size, tree_depth, constant_leaf=True
+                cur_data[:, mask],
+                out_size,
+                tree_depth,
+                random_prob=random_prob,
+                constant_leaf=True,
             )
             layer = CascadeNVPPartial(
                 mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
@@ -65,7 +71,11 @@ def initialize_tao_nvp(
 
 
 def random_tree(
-    xs: torch.Tensor, out_size: int, depth: int, constant_leaf: bool = False
+    xs: torch.Tensor,
+    out_size: int,
+    depth: int,
+    random_prob: float = 0.0,
+    constant_leaf: bool = False,
 ) -> Tree:
     in_size = xs.shape[1]
     if depth == 0:
@@ -89,4 +99,5 @@ def random_tree(
         ),
         coef=split_direction,
         threshold=threshold,
+        random_prob=random_prob,
     )

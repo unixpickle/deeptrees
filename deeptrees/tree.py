@@ -80,19 +80,37 @@ class AxisTreeBranch(TreeBranch):
 
 class ObliqueTreeBranch(TreeBranch):
     def __init__(
-        self, left: Tree, right: Tree, coef: torch.Tensor, threshold: torch.Tensor
+        self,
+        left: Tree,
+        right: Tree,
+        coef: torch.Tensor,
+        threshold: torch.Tensor,
+        random_prob: float = 0.0,
     ):
         super().__init__(left, right)
+        self.random_prob = random_prob
         self.register_buffer("coef", coef)
         self.register_buffer("threshold", threshold)
 
     def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
         return ObliqueTreeBranch(
-            left=left, right=right, coef=self.coef, threshold=self.threshold
+            left=left,
+            right=right,
+            coef=self.coef,
+            threshold=self.threshold,
+            random_prob=self.random_prob,
         )
 
     def decision(self, xs: torch.Tensor) -> torch.Tensor:
-        return (xs @ self.coef).view(-1) > self.threshold
+        raw_output = (xs @ self.coef).view(-1) > self.threshold
+        if self.training and self.random_prob > 0:
+            mask = torch.rand(len(xs), device=xs.device) > self.random_prob
+            randomized = torch.randint(
+                low=0, high=2, size=(len(xs),), device=xs.device
+            ).bool()
+            return torch.where(mask, raw_output, randomized)
+        else:
+            return raw_output
 
 
 class LinearTreeLeaf(TreeLeaf):

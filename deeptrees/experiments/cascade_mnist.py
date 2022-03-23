@@ -29,6 +29,7 @@ def main():
         hidden_sizes=(64, 32, 10),
         tree_depth=3,
         branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
+        random_prob=0.2,
     )
     sgd_model = CascadeSGD(
         model, interval=5, opt=optim.Adam(model.parameters(), lr=1e-3)
@@ -43,9 +44,11 @@ def main():
             batch_size=1024,
         )
         with torch.no_grad():
+            sgd_model.eval()
             test_out = sgd_model(Batch.with_x(test_xs)).x
             test_losses = loss(test_out, test_ys)
             test_acc = (test_out.argmax(-1) == test_ys).float().mean()
+            sgd_model.train()
         print(
             f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_losses.mean().item():.05} test_acc={test_acc.item():.05}"
         )

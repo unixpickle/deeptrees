@@ -74,6 +74,7 @@ class TAOBase(ABC):
 
         return self.build_branch(
             cur_branch=sub_tree.with_children(left_result.tree, right_result.tree),
+            cur_decision=decision,
             sample_indices=sample_indices,
             left_losses=left_losses,
             right_losses=right_losses,
@@ -90,6 +91,7 @@ class TAOBase(ABC):
     def build_branch(
         self,
         cur_branch: TreeBranch,
+        cur_decision: torch.Tensor,
         sample_indices: torch.Tensor,
         left_losses: torch.Tensor,
         right_losses: torch.Tensor,
@@ -137,6 +139,7 @@ class StandaloneTAO(TAOBase):
     def build_branch(
         self,
         cur_branch: TreeBranch,
+        cur_decision: torch.Tensor,
         sample_indices: torch.Tensor,
         left_losses: torch.Tensor,
         right_losses: torch.Tensor,
@@ -151,9 +154,7 @@ class StandaloneTAO(TAOBase):
         with torch.no_grad():
             losses = torch.where(tree.decision(xs), right_losses, left_losses)
             if self.reject_unimprovement:
-                old_losses = torch.where(
-                    cur_branch.decision(xs), right_losses, left_losses
-                )
+                old_losses = torch.where(cur_decision, right_losses, left_losses)
                 if old_losses.mean().item() < losses.mean().item():
                     tree = cur_branch
                     losses = old_losses

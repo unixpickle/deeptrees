@@ -150,3 +150,12 @@ class ConstantTreeLeaf(TreeLeaf):
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         return self.output.view(1, -1).repeat(len(xs), 1)
+
+
+class GateTreeLeaf(TreeLeaf):
+    def __init__(self, weights: torch.Tensor):
+        super().__init__()
+        self.weights = nn.Parameter(weights)
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        return xs * (self.weights.tanh() + 1)

@@ -1,73 +1,159 @@
 import math
-from typing import Sequence
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Sequence, Tuple, Union
 
 import torch
 
-from .cascade import Batch, CascadeSequential, CascadeTAO
+from .cascade import Batch, CascadeModule, CascadeSequential, CascadeTAO
 from .cascade_nvp import CascadeNVPPartial, CascadeNVPSequential
 from .fit_base import TreeBranchBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
 
 
-def initialize_tao_dense(
-    xs: torch.Tensor,
-    hidden_sizes: Sequence[int],
-    tree_depth: int,
-    branch_builder: TreeBranchBuilder,
-    random_prob: float = 0.0,
-    **tao_kwargs,
-) -> CascadeSequential:
-    """
-    Initialize a dense feedforward network with the given hidden vector sizes.
-    The last hidden size should be the output dimensionality.
-    """
-    cur_data = xs
-    layers = []
-    for out_size in hidden_sizes:
-        tree = random_tree(cur_data, out_size, tree_depth, random_prob=random_prob)
-        cur_data = tree(cur_data)
-        layers.append(CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs))
-    return CascadeSequential(layers)
+@dataclass
+class CascadeInit(ABC):
+    @abstractmethod
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        """
+        Initialize a sequence of modules for the current input batch.
+
+        :param inputs: some sample inputs to the layer.
+        :return: a tuple (layers, outputs).
+        """
 
 
-def initialize_tao_nvp(
-    xs: torch.Tensor,
-    num_layers: int,
-    tree_depth: int,
-    branch_builder: TreeBranchBuilder,
-    random_prob: float = 0.0,
-    **tao_kwargs,
-) -> CascadeSequential:
-    """
-    Initialize a cascaded RealNVP-like model as a sequence of CascadeNVPPartial
-    layers, where each layer contains a TAO module with constant output leaves.
-    """
-    in_size = xs.shape[1]
-    assert in_size % 2 == 0, "must operate on an even number of features"
-    assert (
-        num_layers % 2 == 0
-    ), "must have even number of layers for fair distribution of masks"
-    cur_data = xs
-    layers = []
-    for _ in range(num_layers // 2):
-        sep = torch.zeros(in_size, dtype=torch.bool, device=xs.device)
+@dataclass
+class CascadeTAOInit(CascadeInit):
+    out_size: int
+    tree_depth: int
+    branch_builder: TreeBranchBuilder
+    reject_unimprovement: bool = True
+    random_prob: float = 0.0
+
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        tree = random_tree(
+            inputs.x, self.out_size, self.tree_depth, random_prob=self.random_prob
+        )
+        with torch.no_grad():
+            inputs = Batch.with_x(tree(inputs.x))
+        return (
+            CascadeTAO(
+                tree,
+                branch_builder=self.branch_builder,
+                reject_unimprovement=self.reject_unimprovement,
+            ),
+            inputs,
+        )
+
+
+@dataclass
+class CascadeTAONVPInit(CascadeInit):
+    tree_depth: int
+    branch_builder: TreeBranchBuilder
+    reject_unimprovement: bool = True
+    random_prob: float = 0.0
+
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        in_size = inputs.x.shape[1]
+        assert in_size % 2 == 0, "must operate on an even number of features"
+
+        sep = torch.zeros(in_size, dtype=torch.bool, device=inputs.x.device)
         sep[torch.randperm(in_size, device=sep.device)[: in_size // 2]] = True
 
+        result = []
         for mask in [sep, ~sep]:
             out_size = 2 * (~mask).long().sum().item()
             tree = random_tree(
-                cur_data[:, mask],
+                inputs.x[:, mask],
                 out_size,
-                tree_depth,
-                random_prob=random_prob,
+                self.tree_depth,
+                random_prob=self.random_prob,
                 constant_leaf=True,
             )
             layer = CascadeNVPPartial(
-                mask, CascadeTAO(tree, branch_builder=branch_builder, **tao_kwargs)
+                mask,
+                CascadeTAO(
+                    tree,
+                    branch_builder=self.branch_builder,
+                    reject_unimprovement=self.reject_unimprovement,
+                ),
             )
-            layers.append(layer)
-            cur_data = layer(Batch.with_x(cur_data)).x
-    return CascadeNVPSequential(layers)
+            result.append(layer)
+            with torch.no_grad():
+                inputs = layer(inputs)
+        return result, inputs
+
+
+@dataclass
+class CascadeSequentialInit(CascadeInit):
+    initializers: Sequence[CascadeInit]
+    nvp: bool = False
+
+    @classmethod
+    def tao_dense(
+        cls,
+        hidden_sizes: Sequence[int],
+        tree_depth: int,
+        branch_builder: TreeBranchBuilder,
+        random_prob: float = 0.0,
+        reject_unimprovement: bool = True,
+    ):
+        return cls(
+            [
+                CascadeTAOInit(
+                    out_size=x,
+                    tree_depth=tree_depth,
+                    branch_builder=branch_builder,
+                    random_prob=random_prob,
+                    reject_unimprovement=reject_unimprovement,
+                )
+                for x in hidden_sizes
+            ]
+        )
+
+    @classmethod
+    def tao_nvp(
+        cls,
+        num_layers: int,
+        tree_depth: int,
+        branch_builder: TreeBranchBuilder,
+        random_prob: float = 0.0,
+        reject_unimprovement: bool = True,
+    ):
+        assert num_layers % 2 == 0, "must have even number of layers"
+        return cls(
+            [
+                CascadeTAONVPInit(
+                    tree_depth=tree_depth,
+                    branch_builder=branch_builder,
+                    random_prob=random_prob,
+                    reject_unimprovement=reject_unimprovement,
+                )
+                for _ in range(num_layers // 2)
+            ],
+            nvp=True,
+        )
+
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        result = []
+        for x in self.initializers:
+            layers, inputs = x(inputs)
+            if isinstance(layers, list):
+                result.extend(layers)
+            else:
+                result.append(layers)
+        return (CascadeSequential if not self.nvp else CascadeNVPSequential)(
+            result
+        ), inputs
 
 
 def random_tree(

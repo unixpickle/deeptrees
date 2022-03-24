@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeSGD
-from deeptrees.cascade_init import initialize_tao_nvp
+from deeptrees.cascade_init import CascadeSequentialInit
 from deeptrees.cascade_nvp import latents_from_batch, nvp_loss, quantization_noise
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
@@ -33,12 +33,11 @@ def main():
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
-    model = initialize_tao_nvp(
-        xs=xs,
+    model, _ = CascadeSequentialInit.tao_nvp(
         num_layers=16,
         tree_depth=3,
         branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
-    )
+    )(Batch.with_x(xs))
     sgd_model = CascadeSGD(
         model, interval=5, opt=optim.Adam(model.parameters(), lr=1e-3)
     )

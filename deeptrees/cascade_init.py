@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from typing import List, Sequence, Tuple, Union
 
 import torch
+import torch.nn as nn
 
-from .cascade import Batch, CascadeModule, CascadeSequential, CascadeTAO
+from .cascade import (
+    Batch,
+    CascadeLinearGatedTAO,
+    CascadeModule,
+    CascadeSequential,
+    CascadeTAO,
+)
 from .cascade_nvp import CascadeNVPPartial, CascadeNVPSequential
 from .fit_base import TreeBranchBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
@@ -44,6 +51,36 @@ class CascadeTAOInit(CascadeInit):
         return (
             CascadeTAO(
                 tree,
+                branch_builder=self.branch_builder,
+                reject_unimprovement=self.reject_unimprovement,
+            ),
+            inputs,
+        )
+
+
+@dataclass
+class CascadeLinearGatedTAOInit(CascadeTAOInit):
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        tree = random_tree(
+            inputs.x,
+            self.out_size,
+            self.tree_depth,
+            random_prob=self.random_prob,
+            constant_leaf=True,
+        )
+        in_size = inputs.x.shape[1]
+        layer = nn.Linear(in_size, self.out_size).to(inputs.x)
+        with torch.no_grad():
+            layer.weight.copy_(torch.randn(self.out_size, in_size) / math.sqrt(in_size))
+            layer.bias.zero_()
+            gates = tree(inputs.x).tanh() + 1
+            inputs = Batch.with_x(layer(inputs.x) * gates)
+        return (
+            CascadeLinearGatedTAO(
+                tree,
+                linear_layer=layer,
                 branch_builder=self.branch_builder,
                 reject_unimprovement=self.reject_unimprovement,
             ),
@@ -108,6 +145,28 @@ class CascadeSequentialInit(CascadeInit):
         return cls(
             [
                 CascadeTAOInit(
+                    out_size=x,
+                    tree_depth=tree_depth,
+                    branch_builder=branch_builder,
+                    random_prob=random_prob,
+                    reject_unimprovement=reject_unimprovement,
+                )
+                for x in hidden_sizes
+            ]
+        )
+
+    @classmethod
+    def linear_gated_tao(
+        cls,
+        hidden_sizes: Sequence[int],
+        tree_depth: int,
+        branch_builder: TreeBranchBuilder,
+        random_prob: float = 0.0,
+        reject_unimprovement: bool = True,
+    ):
+        return cls(
+            [
+                CascadeLinearGatedTAOInit(
                     out_size=x,
                     tree_depth=tree_depth,
                     branch_builder=branch_builder,

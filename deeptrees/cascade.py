@@ -291,6 +291,51 @@ class CascadeTAO(CascadeModule):
         self.tree.load_state_dict(h_tao.optimize(self.tree).tree.state_dict())
 
 
+class CascadeLinearGatedTAO(CascadeModule):
+    """
+    A linear layer paired with a tree that outputs gates for the outputs of the
+    linear layer.
+
+    The provided TreeBranchBuilder should not change the types or structure of
+    the tree. In particular, the state_dict of trees should not change keys or
+    the shapes of values across updates.
+    """
+
+    def __init__(
+        self,
+        tree: Tree,
+        linear_layer: nn.Linear,
+        branch_builder: TreeBranchBuilder,
+        reject_unimprovement: bool = True,
+    ):
+        super().__init__()
+        self.tree = tree
+        self.linear_layer = linear_layer
+        self.branch_builder = branch_builder
+        self.reject_unimprovement = reject_unimprovement
+
+    def evaluate(self, inputs: Batch) -> Batch:
+        gates = self.tree(inputs.x).tanh() + 1
+        return Batch.with_x(gates * self.linear_layer(inputs.x))
+
+    def update_local(self, ctx: UpdateContext):
+        with torch.no_grad():
+            linear_outputs = self.linear_layer(ctx.inputs.x)
+
+        def loss_fn(indices: torch.Tensor, batch: Batch) -> torch.Tensor:
+            return ctx.loss_fn(
+                indices, Batch.with_x((batch.x.tanh() + 1) * linear_outputs[indices])
+            )
+
+        h_tao = _CascadeTAO(
+            xs=ctx.inputs.x,
+            loss_fn=loss_fn,
+            branch_builder=self.branch_builder,
+            reject_unimprovement=self.reject_unimprovement,
+        )
+        self.tree.load_state_dict(h_tao.optimize(self.tree).tree.state_dict())
+
+
 @dataclass
 class _CascadeTAO(TAOBase):
     """

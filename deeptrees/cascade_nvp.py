@@ -1,12 +1,12 @@
 import itertools
 import math
 from abc import abstractmethod
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import torch
 from torch.distributions.normal import Normal
 
-from .cascade import Batch, CascadeModule, CascadeSequential, UpdateContext
+from .cascade import Batch, BatchLossFn, CascadeModule, CascadeSequential, UpdateContext
 
 
 class CascadeNVPLayer(CascadeModule):
@@ -14,8 +14,8 @@ class CascadeNVPLayer(CascadeModule):
     A layer in a RealNVP-style model.
     """
 
-    def evaluate(self, x: Batch) -> Batch:
-        return self._results_batch(x, self.evaluate_nvp(x.x))
+    def forward(self, x: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        return self._results_batch(x, self.evaluate_nvp(x.x, ctx=ctx))
 
     def _results_batch(
         self,
@@ -33,12 +33,13 @@ class CascadeNVPLayer(CascadeModule):
 
     @abstractmethod
     def evaluate_nvp(
-        self, x: torch.Tensor
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
         """
         Evaluate the model on the input x.
 
         :param x: the input tensor from the previous layer.
+        :param ctx: the update context (if there is one).
         :return: a tuple (outputs, latents, log_det).
                  - outputs: the output latent of the layer to be sent downstream.
                  - latents: zero or more split off latent variables.
@@ -69,8 +70,9 @@ class CascadeNVPPaddedLogit(CascadeNVPLayer):
         self.alpha = alpha
 
     def evaluate_nvp(
-        self, x: torch.Tensor
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        _ = ctx
         y = self.alpha + (1 - 2 * self.alpha) * x
         logits = (y / (1 - y)).log()
         log_dets = (1 / y + 1 / (1 - y)).log() + ((1 - 2 * self.alpha)).log()
@@ -80,8 +82,8 @@ class CascadeNVPPaddedLogit(CascadeNVPLayer):
         assert not len(latents)
         return (outputs.sigmoid() - self.alpha) / (1 - 2 * self.alpha)
 
-    def update_local(self, ctx: UpdateContext):
-        _ = ctx
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = ctx, loss_fn
 
 
 class CascadeNVPPartial(CascadeNVPLayer):
@@ -91,36 +93,63 @@ class CascadeNVPPartial(CascadeNVPLayer):
     actual scale/shift parameters.
     """
 
-    def __init__(self, feature_mask: torch.Tensor, sub_layer: CascadeModule):
+    def __init__(
+        self,
+        feature_mask: torch.Tensor,
+        sub_layer: CascadeModule,
+        no_cache_sub_inputs: bool = True,
+    ):
         super().__init__()
         self.register_buffer("feature_mask", feature_mask)
         self.sub_layer = sub_layer
+        self.no_cache_sub_inputs = no_cache_sub_inputs
+
+    def forward(self, x: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        if ctx is not None:
+            ctx.cache_inputs(self, x)
+        results = self._results_batch(x, self.evaluate_nvp(x.x, ctx=ctx))
+
+        if self.no_cache_sub_inputs and ctx is not None:
+            # Delete sub_layer input cache because we can quickly recompute it.
+            ctx.get_inputs(self.sub_layer, concatenate=False, remove=True)
+
+        return results
 
     def evaluate_nvp(
-        self, x: torch.Tensor
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
-        predictions = self.sub_layer(
-            Batch.with_x(x[:, self.feature_mask]), cache_inputs=False
-        )
+        predictions = self.sub_layer(Batch.with_x(x[:, self.feature_mask]), ctx=ctx)
         return self._output_for_predictions(x, predictions.x)
 
     def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
         assert not len(latents)
-        predictions = self.sub_layer(
-            Batch.with_x(outputs[:, self.feature_mask]), cache_inputs=False
-        )
+        predictions = self.sub_layer(Batch.with_x(outputs[:, self.feature_mask]))
         return self._output_for_predictions(outputs, predictions.x, inverse=True)[0]
 
-    def update_local(self, ctx: UpdateContext):
-        def loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
-            sub_batch = ctx.inputs.at_indices(indices)
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        input_cache = ctx.get_inputs(self, concatenate=False)
+
+        if self.no_cache_sub_inputs:
+            # We deleted the input cache of the sub_layer, so we
+            # recreate it here as if it was never gone.
+            for batch in input_cache:
+                ctx.cache_inputs(
+                    self.sub_layer, Batch.with_x(batch.x[:, self.feature_mask])
+                )
+
+        inputs = Batch.cat(input_cache, dim=0)
+
+        def inner_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+            sub_batch = inputs.at_indices(indices)
             out_tuple = self._output_for_predictions(sub_batch.x, outputs.x)
             out_batch = self._results_batch(sub_batch, out_tuple)
-            return ctx.loss_fn(indices, out_batch)
+            return loss_fn(indices, out_batch)
 
-        self.sub_layer._update(
-            loss_fn, inputs=Batch.with_x(ctx.inputs.x[:, self.feature_mask])
-        )
+        self.sub_layer.update_local(ctx, inner_loss_fn)
+
+        if self.no_cache_sub_inputs:
+            # Save memory if the sub_layer didn't consume its input cache.
+            ctx.get_inputs(self.sub_layer, concatenate=False, remove=True)
 
     def _output_for_predictions(
         self, x: torch.Tensor, predictions: torch.Tensor, inverse: bool = False
@@ -141,11 +170,11 @@ class CascadeNVPPartial(CascadeNVPLayer):
 
 class CascadeNVPSequential(CascadeNVPLayer, CascadeSequential):
     def evaluate_nvp(
-        self, x: torch.Tensor
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
         out = Batch.with_x(x)
         for layer in self.sequence:
-            out = layer(out)
+            out = layer(out, ctx=ctx)
         return out.x, latents_from_batch(out), out["log_det"]
 
     def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):

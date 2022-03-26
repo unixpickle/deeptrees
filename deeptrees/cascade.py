@@ -128,34 +128,44 @@ class UpdateContext:
         return torch.cat(self._loss_cache, dim=0)
 
     def get_inputs(
-        self, module: nn.Module, concatenate: bool = True
+        self, module: nn.Module, concatenate: bool = True, remove: bool = True
     ) -> Union[Batch, List[Batch]]:
         """
         Get all of the cached inputs for the given module.
         """
-        return self._get_batch(self._inputs_cache, module, concatenate)
+        return self._get_batch(self._inputs_cache, module, concatenate, remove)
 
     def get_outputs(
-        self, module: nn.Module, concatenate: bool = True
+        self,
+        module: nn.Module,
+        concatenate: bool = True,
+        remove: bool = True,
     ) -> Union[Batch, List[Batch]]:
         """
         Get all of the cached outputs for the given module.
         """
-        return self._get_batch(self._outputs_cache, module, concatenate)
+        return self._get_batch(self._outputs_cache, module, concatenate, remove)
 
     def get_grads(
-        self, module: nn.Module, concatenate: bool = True
+        self, module: nn.Module, concatenate: bool = True, remove: bool = True
     ) -> Union[Batch, List[Batch]]:
         """
         Get all of the cached grads for the given module.
         """
-        return self._get_batch(self._grads_cache, module, concatenate)
+        return self._get_batch(self._grads_cache, module, concatenate, remove)
 
     def _get_batch(
-        self, batch: Dict[nn.Module, List[Batch]], module: nn.Module, concatenate: bool
+        self,
+        batch: Dict[nn.Module, List[Batch]],
+        module: nn.Module,
+        concatenate: bool,
+        remove: bool,
     ) -> Union[Batch, List[Batch]]:
-        assert module in batch, f"module has no recorded values"
+        if concatenate:
+            assert module in batch, f"module has no recorded values"
         results = batch[module]
+        if remove:
+            del batch[module]
         if not concatenate:
             return results
         else:

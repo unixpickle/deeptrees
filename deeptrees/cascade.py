@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, Iterator, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -66,18 +66,100 @@ class Batch(dict):
 BatchLossFn = Callable[[torch.Tensor, Batch], torch.Tensor]
 
 
-@dataclass
 class UpdateContext:
-    inputs: Batch
+    def __init__(self):
+        self._inputs_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
+        self._outputs_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
+        self._grads_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
+        self._cur_autograd_cache: Dict[nn.Module, Batch] = dict()
+        self._loss_cache: List[torch.Tensor] = []
 
-    # This function takes two arguments: (indices, outputs).
-    # The indices argument specifies which inputs the outputs correspond to in
-    # the full batch.
-    loss_fn: BatchLossFn
+    def cache_inputs(self, module: nn.Module, inputs: Batch):
+        """
+        Call during module forward() to cache a batch of inputs.
+        """
+        self._inputs_cache[module].append(inputs.detach())
 
-    # Only specified if a module's "require-_output_grad" returns true.
-    outputs: Optional[Batch] = None
-    output_grads: Optional[Batch] = None
+    def cache_outputs(self, module: nn.Module, outputs: Batch):
+        """
+        Call during module forward() to cache a batch of outputs.
+        """
+        self._outputs_cache[module].append(outputs.detach())
+
+    def require_grad(self, module: nn.Module, outputs: Batch) -> Batch:
+        """
+        Call during module forward() to request a gradient for the outputs.
+        Returns a new Batch that should be returned from the module.
+        """
+        assert module not in self._cur_autograd_cache
+        outputs = outputs.force_requires_grad()
+        self._cur_autograd_cache[module] = outputs
+        return outputs
+
+    def backward(self, losses: torch.Tensor):
+        """
+        Update the gradient cache for batches passed to require_grad() based on
+        the loss.
+        """
+        self._loss_cache.append(losses.detach())
+        tensors = []
+        for batch in self._cur_autograd_cache.values():
+            tensors.extend(x for x in batch.values() if x.requires_grad)
+        if len(tensors) == 0:
+            self._cur_autograd_cache.clear()
+            return
+        grads = torch.autograd.grad(losses.sum(), tensors)
+        grads = list(grads)
+
+        for module, batch in self._cur_autograd_cache.items():
+            grad_batch = Batch()
+            for k, v in batch.items():
+                if v.requires_grad:
+                    grad_batch[k] = grads.pop()
+            self._grads_cache[module].append(grad_batch)
+        assert not len(grads), "did not consume all gradients while structuring them"
+
+        self._cur_autograd_cache.clear()
+
+    def get_losses(self) -> torch.Tensor:
+        """
+        Get all of the losses concatenated from all of the backward() calls.
+        """
+        return torch.cat(self._loss_cache, dim=0)
+
+    def get_inputs(
+        self, module: nn.Module, concatenate: bool = True
+    ) -> Union[Batch, List[Batch]]:
+        """
+        Get all of the cached inputs for the given module.
+        """
+        return self._get_batch(self._inputs_cache, module, concatenate)
+
+    def get_outputs(
+        self, module: nn.Module, concatenate: bool = True
+    ) -> Union[Batch, List[Batch]]:
+        """
+        Get all of the cached outputs for the given module.
+        """
+        return self._get_batch(self._outputs_cache, module, concatenate)
+
+    def get_grads(
+        self, module: nn.Module, concatenate: bool = True
+    ) -> Union[Batch, List[Batch]]:
+        """
+        Get all of the cached grads for the given module.
+        """
+        return self._get_batch(self._grads_cache, module, concatenate)
+
+    def _get_batch(
+        self, batch: Dict[nn.Module, List[Batch]], module: nn.Module, concatenate: bool
+    ) -> Union[Batch, List[Batch]]:
+        assert module in batch, f"module has no recorded values"
+        results = batch[module]
+        if not concatenate:
+            return results
+        else:
+            return Batch.cat(results, dim=0)
 
 
 class CascadeModule(nn.Module, ABC):
@@ -90,62 +172,18 @@ class CascadeModule(nn.Module, ABC):
 
     def __init__(self):
         super().__init__()
-        self._preparing_for_update = False
-        self._cached_inputs = []
-        self._cached_outputs = []
-        self._cached_grads = []
 
-    def forward(self, inputs: Batch, cache_inputs: bool = True) -> Batch:
-        out = self.evaluate(inputs)
-
-        if self._preparing_for_update and cache_inputs:
-            self._cached_inputs.append(inputs)
-
-        if not (self._preparing_for_update and self.requires_output_grad()):
-            return out
-
-        self._cached_outputs.append(out.detach().clone())
-        out = out.force_requires_grad()
-
-        class _CacheGradFunc(torch.autograd.Function):
-            @staticmethod
-            def forward(_ctx, *inputs):
-                return inputs
-
-            @staticmethod
-            def backward(_ctx, *grad_outputs):
-                self._cached_grads.append(
-                    Batch(
-                        {
-                            k: v.detach().clone()
-                            for k, v in zip(out.keys(), grad_outputs)
-                        }
-                    )
-                )
-                return grad_outputs
-
-        return Batch(dict(zip(out.keys(), _CacheGradFunc.apply(out.values()))))
-
-    def requires_output_grad(self) -> bool:
+    @abstractmethod
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         """
-        If this method returns True, calls to update() will include the output
-        and output gradient of the loss function for this module.
+        Run the module, caching values in ctx if necessary.
         """
 
     @abstractmethod
-    def evaluate(self, inputs: Batch) -> Batch:
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         """
-        Evaluate the output of the module given the input.
-
-        Subclasses should override this method instead of forward().
-        """
-
-    @abstractmethod
-    def update_local(self, ctx: UpdateContext):
-        """
-        Update the parameters of the module and its submodules given the
-        inputs, loss function, and possibly gradients of the loss function
-        w.r.t. the outputs.
+        Update the parameters of the module and its submodules given the loss
+        function and context that was previously used for a forward pass.
         """
 
     def update(
@@ -154,7 +192,7 @@ class CascadeModule(nn.Module, ABC):
         """
         Update the parameters of the module and all its submodules given the
         inputs and loss function. Gradients will automatically be calculated
-        as necessary, and update_local() will be called on submodules.
+        as necessary, and update_local() will be called on self.
 
         This should be called once on the root module, since it will amortize
         the cost of running backpropagation throughout the model.
@@ -165,68 +203,13 @@ class CascadeModule(nn.Module, ABC):
                            during the initial forward/backward passes.
         :return: a 1-D tensor of pre-update losses.
         """
-        self._apply_cascade(lambda x: x._prepare_for_update())
-
-        # Propagate all of the samples to accumulate inputs, outputs, and
-        # gradients at all of the nodes.
-        all_losses = []
+        ctx = UpdateContext()
         for indices, sub_batch in full_batch.batches(batch_size or len(full_batch)):
-            losses = loss_fn(indices, self(sub_batch))
-            all_losses.append(losses.detach())
-            losses.sum().backward()
-
-        self._apply_cascade(lambda x: x._updating())
-        self._update(loss_fn)
-        self._apply_cascade(lambda x: x._completed_update())
-
-        return torch.cat(all_losses, dim=0)
-
-    def _prepare_for_update(self):
-        self._preparing_for_update = True
-
-    def _updating(self):
-        self._preparing_for_update = False
-
-    def _completed_update(self):
-        self._cached_inputs = []
-        self._cached_outputs = []
-        self._cached_grads = []
-
-    def _apply_cascade(self, fn):
-        def apply_fn(module):
-            if isinstance(module, CascadeModule):
-                fn(module)
-
-        self.apply(apply_fn)
-
-    def _update(
-        self,
-        loss_fn: BatchLossFn,
-        inputs: Optional[Batch] = None,
-    ):
-        if inputs is None:
-            inputs = Batch.cat(self._cached_inputs, dim=0)
-        self._cached_inputs = []
-        if self.requires_output_grad():
-            outputs = Batch.cat(self._cached_outputs, dim=0)
-            self._cached_outputs = []
-            grads = Batch.cat(self._cached_grads, dim=0)
-            self._cached_grads = []
-            assert len(inputs) == len(outputs), "invalid sample count fed through model"
-            assert len(outputs) == len(
-                grads
-            ), "mismatching number of forward() and backward()"
-        else:
-            outputs, grads = None, None
-
-        self.update_local(
-            UpdateContext(
-                inputs=inputs,
-                loss_fn=loss_fn,
-                outputs=outputs,
-                output_grads=grads,
-            )
-        )
+            losses = loss_fn(indices, self(sub_batch, ctx=ctx))
+            ctx.backward(losses)
+            del losses  # possibly save memory if backward() didn't destroy graph.
+        self.update_local(ctx, loss_fn)
+        return ctx.get_losses()
 
 
 class CascadeSequential(CascadeModule):
@@ -238,13 +221,13 @@ class CascadeSequential(CascadeModule):
         super().__init__()
         self.sequence = nn.ModuleList(sequence)
 
-    def evaluate(self, inputs: Batch) -> Batch:
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         out = inputs
         for layer in self.sequence:
-            out = layer(out)
+            out = layer(out, ctx=ctx)
         return out
 
-    def update_local(self, ctx: UpdateContext):
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         for i in range(len(self.sequence))[::-1]:
 
             def child_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
@@ -252,10 +235,9 @@ class CascadeSequential(CascadeModule):
                     final_outputs = outputs
                     for layer in self.sequence[i + 1 :]:
                         final_outputs = layer(final_outputs)
-                    return ctx.loss_fn(indices, final_outputs)
+                    return loss_fn(indices, final_outputs)
 
-            child = self.sequence[i]
-            child._update(child_loss_fn)
+            self.sequence[i].update_local(ctx, child_loss_fn)
 
 
 class CascadeTAO(CascadeModule):
@@ -278,13 +260,15 @@ class CascadeTAO(CascadeModule):
         self.branch_builder = branch_builder
         self.reject_unimprovement = reject_unimprovement
 
-    def evaluate(self, inputs: Batch) -> Batch:
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        if ctx is not None:
+            ctx.cache_inputs(self, inputs)
         return Batch.with_x(self.tree(inputs.x))
 
-    def update_local(self, ctx: UpdateContext):
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         h_tao = _CascadeTAO(
-            xs=ctx.inputs.x,
-            loss_fn=ctx.loss_fn,
+            xs=ctx.get_inputs(self).x,
+            loss_fn=loss_fn,
             branch_builder=self.branch_builder,
             reject_unimprovement=self.reject_unimprovement,
         )
@@ -314,22 +298,26 @@ class CascadeLinearGatedTAO(CascadeModule):
         self.branch_builder = branch_builder
         self.reject_unimprovement = reject_unimprovement
 
-    def evaluate(self, inputs: Batch) -> Batch:
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        if ctx is not None:
+            ctx.cache_inputs(self, inputs)
         gates = self.tree(inputs.x).tanh() + 1
         return Batch.with_x(gates * self.linear_layer(inputs.x))
 
-    def update_local(self, ctx: UpdateContext):
-        with torch.no_grad():
-            linear_outputs = self.linear_layer(ctx.inputs.x)
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        inputs = ctx.get_inputs(self)
 
-        def loss_fn(indices: torch.Tensor, batch: Batch) -> torch.Tensor:
-            return ctx.loss_fn(
+        with torch.no_grad():
+            linear_outputs = self.linear_layer(inputs.x)
+
+        def tao_loss_fn(indices: torch.Tensor, batch: Batch) -> torch.Tensor:
+            return loss_fn(
                 indices, Batch.with_x((batch.x.tanh() + 1) * linear_outputs[indices])
             )
 
         h_tao = _CascadeTAO(
-            xs=ctx.inputs.x,
-            loss_fn=loss_fn,
+            xs=inputs.x,
+            loss_fn=tao_loss_fn,
             branch_builder=self.branch_builder,
             reject_unimprovement=self.reject_unimprovement,
         )
@@ -401,20 +389,18 @@ class CascadeSGD(CascadeModule):
             device = torch.device("cpu")
         self.register_buffer("step", torch.tensor(0, dtype=torch.int64, device=device))
 
-    def evaluate(self, inputs: Batch) -> Batch:
-        return self.contained(inputs)
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        return self.contained(inputs, ctx=ctx)
 
-    def update_local(self, ctx: UpdateContext):
-        self.contained.update_local(ctx)
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        self.contained.update_local(ctx, loss_fn)
 
     def update(
         self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None
     ) -> torch.Tensor:
         self.step.add_(1)
         if self.step.item() % self.interval == 0:
-            result = super().update(full_batch, loss_fn, batch_size=batch_size)
-            self.optimizer.zero_grad()
-            return result
+            return super().update(full_batch, loss_fn, batch_size=batch_size)
         else:
             self.optimizer.zero_grad()
             all_losses = []

@@ -85,7 +85,9 @@ class TAOBase(ABC):
     ) -> torch.Tensor:
         with torch.no_grad():
             outputs = sub_tree(self.xs[sample_indices])
-        return self.output_loss(sample_indices, outputs)
+        losses = self.output_loss(sample_indices, outputs)
+        assert losses.shape == sample_indices.shape
+        return losses
 
     @abstractmethod
     def build_branch(

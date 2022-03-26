@@ -108,14 +108,16 @@ class UpdateContext:
         if len(tensors) == 0:
             self._cur_autograd_cache.clear()
             return
-        grads = torch.autograd.grad(losses.sum(), tensors)
+        grads = torch.autograd.grad(losses.sum(), tensors, allow_unused=True)
         grads = list(grads)
 
         for module, batch in self._cur_autograd_cache.items():
             grad_batch = Batch()
             for k, v in batch.items():
                 if v.requires_grad:
-                    grad_batch[k] = grads.pop()
+                    next_grad = grads.pop(0)
+                    if next_grad is not None:
+                        grad_batch[k] = next_grad
             self._grads_cache[module].append(grad_batch)
         assert not len(grads), "did not consume all gradients while structuring them"
 
@@ -379,6 +381,51 @@ class _CascadeTAO(TAOBase):
         self, sample_indices: torch.Tensor, outputs: torch.Tensor
     ) -> torch.Tensor:
         return self.loss_fn(sample_indices, Batch.with_x(outputs))
+
+
+class CascadeGradientLoss(CascadeModule):
+    """
+    Wrap a module to use a local linear loss function based on a gradient.
+    This prevents expensive forward propagation through the rest of the model.
+    """
+
+    def __init__(
+        self, contained: CascadeModule, damping: float = 0.0, sign_only: bool = False
+    ):
+        super().__init__()
+        self.contained = contained
+        self.damping = damping
+        self.sign_only = sign_only
+
+    def forward(self, x: Batch, ctx: Optional[UpdateContext] = None):
+        out = self.contained(x, ctx=ctx)
+        if ctx is not None:
+            ctx.cache_outputs(self, out)
+            return ctx.require_grad(self, out)
+        else:
+            return out
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = loss_fn
+        original_out = ctx.get_outputs(self)
+        gradient = ctx.get_grads(self)
+        assert len(gradient), "at least one output must have gradient info"
+
+        def local_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+            losses = 0.0
+            x0 = original_out.at_indices(indices)
+            for k, g in gradient.at_indices(indices).items():
+                if self.damping:
+                    losses = losses + self.damping * (
+                        (outputs[k] - x0[k]) ** 2
+                    ).flatten(1).sum(1)
+                dots = ((outputs[k] - x0[k]) * g).flatten(1).sum(1)
+                if self.sign_only:
+                    dots = dots.sign().float()
+                losses = losses + dots
+            return losses
+
+        return self.contained.update_local(ctx, local_loss_fn)
 
 
 class CascadeSGD(CascadeModule):

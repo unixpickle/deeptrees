@@ -5,6 +5,7 @@ from typing import Callable, List, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
+from sklearn.tree import DecisionTreeRegressor
 
 from .cascade import (
     Batch,
@@ -16,6 +17,7 @@ from .cascade import (
 )
 from .cascade_nvp import CascadeNVPPartial, CascadeNVPSequential
 from .fit_base import TreeBranchBuilder
+from .fit_sklearn import SklearnRegressionTreeBuilder
 from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
 
 
@@ -95,6 +97,7 @@ class CascadeTAONVPInit(CascadeInit):
     branch_builder: TreeBranchBuilder
     reject_unimprovement: bool = True
     random_prob: float = 0.0
+    regression_init: bool = False
 
     def __call__(
         self, inputs: Batch
@@ -108,13 +111,28 @@ class CascadeTAONVPInit(CascadeInit):
         result = []
         for mask in [sep, ~sep]:
             out_size = 2 * (~mask).long().sum().item()
-            tree = random_tree(
-                inputs.x[:, mask],
-                out_size,
-                self.tree_depth,
-                random_prob=self.random_prob,
-                constant_leaf=True,
-            )
+            if self.regression_init:
+                tree = SklearnRegressionTreeBuilder(
+                    estimator=DecisionTreeRegressor(max_depth=self.tree_depth),
+                ).fit(inputs.x[:, mask], inputs.x[:, ~mask])
+                zero_out = torch.zeros(
+                    out_size,
+                    dtype=inputs.x.dtype,
+                    device=inputs.x.device,
+                )
+                tree = tree.map_branches(
+                    lambda x: x.to_oblique(
+                        inputs.x[:, mask], random_prob=self.random_prob
+                    )
+                ).map_leaves(lambda _: ConstantTreeLeaf(zero_out))
+            else:
+                tree = random_tree(
+                    inputs.x[:, mask],
+                    out_size,
+                    self.tree_depth,
+                    random_prob=self.random_prob,
+                    constant_leaf=True,
+                )
             layer = CascadeNVPPartial(
                 mask,
                 CascadeTAO(
@@ -202,6 +220,7 @@ class CascadeSequentialInit(CascadeInit):
         branch_builder: TreeBranchBuilder,
         random_prob: float = 0.0,
         reject_unimprovement: bool = True,
+        regression_init: bool = False,
     ):
         assert num_layers % 2 == 0, "must have even number of layers"
         return cls(
@@ -211,6 +230,7 @@ class CascadeSequentialInit(CascadeInit):
                     branch_builder=branch_builder,
                     random_prob=random_prob,
                     reject_unimprovement=reject_unimprovement,
+                    regression_init=regression_init,
                 )
                 for _ in range(num_layers // 2)
             ],

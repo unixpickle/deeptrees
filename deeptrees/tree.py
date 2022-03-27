@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -21,11 +22,26 @@ class Tree(nn.Module, ABC):
         one sample in xs.
         """
 
+    @abstractmethod
+    def map_branches(self, fn: Callable[["TreeBranch"], "TreeBranch"]) -> "Tree":
+        pass
+
+    @abstractmethod
+    def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
+        pass
+
 
 class TreeLeaf(Tree):
     def prune(self, xs: torch.Tensor) -> Tree:
         _ = xs
         return self
+
+    def map_branches(self, fn: Callable[["TreeBranch"], "TreeBranch"]) -> "Tree":
+        _ = fn
+        return self
+
+    def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
+        return fn(self)
 
 
 class TreeBranch(Tree):
@@ -58,24 +74,17 @@ class TreeBranch(Tree):
             return self.right
         return self
 
+    def map_branches(self, fn: Callable[["TreeBranch"], "TreeBranch"]) -> "Tree":
+        return fn(
+            self.with_children(self.left.map_branches(fn), self.right.map_branches(fn))
+        )
+
+    def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
+        return self.with_children(self.left.map_leaves(fn), self.right.map_leaves(fn))
+
     @abstractmethod
     def decision(self, xs: torch.Tensor) -> torch.Tensor:
         pass
-
-
-class AxisTreeBranch(TreeBranch):
-    def __init__(self, left: Tree, right: Tree, axis: int, threshold: torch.Tensor):
-        super().__init__(left, right)
-        self.axis = axis
-        self.register_buffer("threshold", threshold)
-
-    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
-        return AxisTreeBranch(
-            left=left, right=right, axis=self.axis, threshold=self.threshold
-        )
-
-    def decision(self, xs: torch.Tensor) -> torch.Tensor:
-        return xs[:, self.axis] > self.threshold
 
 
 class ObliqueTreeBranch(TreeBranch):
@@ -111,6 +120,32 @@ class ObliqueTreeBranch(TreeBranch):
             return torch.where(mask, raw_output, randomized)
         else:
             return raw_output
+
+
+class AxisTreeBranch(TreeBranch):
+    def __init__(self, left: Tree, right: Tree, axis: int, threshold: torch.Tensor):
+        super().__init__(left, right)
+        self.axis = axis
+        self.register_buffer("threshold", threshold)
+
+    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
+        return AxisTreeBranch(
+            left=left, right=right, axis=self.axis, threshold=self.threshold
+        )
+
+    def decision(self, xs: torch.Tensor) -> torch.Tensor:
+        return xs[:, self.axis] > self.threshold
+
+    def to_oblique(self, xs: torch.Tensor, random_prob: float) -> ObliqueTreeBranch:
+        coef = torch.zeros(xs.shape[1], dtype=xs.dtype, device=xs.device)
+        coef[self.axis] = 1.0
+        return ObliqueTreeBranch(
+            left=self.left,
+            right=self.right,
+            coef=coef,
+            threshold=self.threshold,
+            random_prob=random_prob,
+        )
 
 
 class LinearTreeLeaf(TreeLeaf):

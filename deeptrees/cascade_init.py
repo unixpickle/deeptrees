@@ -1,13 +1,14 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple, Union
+from typing import Callable, List, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
 
 from .cascade import (
     Batch,
+    CascadeGradientLoss,
     CascadeLinearGatedTAO,
     CascadeModule,
     CascadeSequential,
@@ -129,6 +130,22 @@ class CascadeTAONVPInit(CascadeInit):
 
 
 @dataclass
+class CascadeGradientLossInit(CascadeInit):
+    contained: CascadeInit
+    damping: float = 0.0
+    sign_only: bool = False
+
+    def __call__(
+        self, inputs: Batch
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        module, outs = self.contained(inputs)
+        return (
+            CascadeGradientLoss(module, damping=self.damping, sign_only=self.sign_only),
+            outs,
+        )
+
+
+@dataclass
 class CascadeSequentialInit(CascadeInit):
     initializers: Sequence[CascadeInit]
     nvp: bool = False
@@ -198,6 +215,12 @@ class CascadeSequentialInit(CascadeInit):
                 for _ in range(num_layers // 2)
             ],
             nvp=True,
+        )
+
+    def map(self, fn: Callable[[CascadeInit], CascadeInit]) -> "CascadeSequentialInit":
+        return CascadeSequentialInit(
+            initializers=[fn(x) for x in self.initializers],
+            nvp=self.nvp,
         )
 
     def __call__(

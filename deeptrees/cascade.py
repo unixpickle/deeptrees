@@ -286,6 +286,28 @@ class CascadeTAO(CascadeModule):
         )
         self.tree.load_state_dict(h_tao.optimize(self.tree).tree.state_dict())
 
+    def leaf_variance(self) -> torch.Tensor:
+        """
+        Return a regularization term measuring the similarity across leaf
+        parameters.
+        """
+        params = defaultdict(list)
+
+        def process_module(module):
+            if isinstance(module, TreeLeaf):
+                for k, v in module.named_parameters():
+                    params[k].append(v)
+
+        self.tree.apply(process_module)
+
+        result = 0.0
+        for leaf_values in params.values():
+            stacked = torch.stack(leaf_values, dim=0)
+            mean = torch.mean(stacked, dim=0)
+            mean_diff = ((stacked - mean) ** 2).mean(0).sum()
+            result = result + mean_diff
+        return result
+
 
 class CascadeLinearGatedTAO(CascadeModule):
     """

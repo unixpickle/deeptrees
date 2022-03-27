@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 import torch.optim as optim
-from deeptrees.cascade import Batch, CascadeSGD
+from deeptrees.cascade import Batch, CascadeSGD, CascadeTAO
 from deeptrees.cascade_init import CascadeGradientLossInit, CascadeSequentialInit
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
@@ -27,12 +27,14 @@ def main():
 
     settings = list(
         itertools.product(
-            [(10,), (64, 32, 10), (300, 10)],
-            [3, 2, 1],
-            [0.0, 0.2],
-            [False, True],
-            [False, True],
-            [5, 10],
+            [(64, 32, 10)],
+            [2, 3],
+            [0.2],
+            [True],
+            [False],
+            [2, 5],
+            [0.0, 0.1, 0.5],
+            [0.0, 0.1, 1.0],
         )
     )
     field_names = [
@@ -42,6 +44,8 @@ def main():
         "gradient_approx",
         "gated",
         "interval",
+        "weight_decay",
+        "leaf_variance_coef",
     ]
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     for setting in settings:
@@ -74,6 +78,8 @@ def run_loss_curves(
     gradient_approx: bool,
     gated: bool,
     interval: int,
+    weight_decay: float,
+    leaf_variance_coef: float,
 ) -> Dict[str, List[float]]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)
@@ -94,7 +100,9 @@ def run_loss_curves(
 
     model, _ = initializer(Batch.with_x(xs))
     sgd_model = CascadeSGD(
-        model, interval=interval, opt=optim.Adam(model.parameters(), lr=1e-3)
+        model,
+        interval=interval,
+        opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=weight_decay),
     )
 
     loss = BoostingSoftmaxLoss()
@@ -103,7 +111,10 @@ def run_loss_curves(
     while time.time() < t0 + TIME_PER_RUN and not early_stop(results):
         _ = sgd_model.update(
             full_batch=Batch.with_x(xs),
-            loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
+            loss_fn=lambda indices, batch: (
+                loss(batch.x, ys[indices])
+                + leaf_variance_coef * leaf_variance(sgd_model)
+            ),
             batch_size=1024,
         )
         with torch.no_grad():
@@ -130,6 +141,17 @@ def early_stop(results: Dict[str, List[float]]) -> bool:
     best_it = np.argmax(acc)
     cur_it = len(acc) - 1
     return best_it + EARLY_STOP_EPOCHS < cur_it
+
+
+def leaf_variance(model: CascadeSGD) -> torch.Tensor:
+    result = [0.0]
+
+    def apply_fn(module):
+        if isinstance(module, CascadeTAO):
+            result[0] = result[0] + module.leaf_variance()
+
+    model.apply(apply_fn)
+    return result[0]
 
 
 if __name__ == "__main__":

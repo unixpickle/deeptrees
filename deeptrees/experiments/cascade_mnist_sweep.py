@@ -16,7 +16,7 @@ from torchvision.datasets.mnist import MNIST
 
 TIME_PER_RUN = 4 * 60
 OUTPUT_DIR = "cascade_mnist_scan"
-EARLY_STOP_EPOCHS = 25
+EARLY_STOP_EPOCHS = 50
 
 
 def main():

@@ -16,6 +16,7 @@ from torchvision.datasets.mnist import MNIST
 
 TIME_PER_RUN = 4 * 60
 OUTPUT_DIR = "cascade_mnist_scan"
+EARLY_STOP_EPOCHS = 25
 
 
 def main():
@@ -56,7 +57,10 @@ def main():
         print(f"completed config {out_name}:")
         print(f" => epochs: {len(result['t'])}")
         print(f" => best val loss: {min(result['val_loss'])}")
+        print(f" => best val loss epoch: {np.argmin(result['val_loss'])}")
         print(f" => best val acc: {max(result['val_acc'])}")
+        print(f" => best val acc epoch: {np.argmax(result['val_acc'])}")
+        print(f" => total time: {result['t'][-1]}")
 
 
 def run_loss_curves(
@@ -96,7 +100,7 @@ def run_loss_curves(
     loss = BoostingSoftmaxLoss()
     results = dict(train_loss=[], val_loss=[], train_acc=[], val_acc=[], t=[])
     t0 = time.time()
-    while time.time() < t0 + TIME_PER_RUN:
+    while time.time() < t0 + TIME_PER_RUN and not early_stop(results):
         _ = sgd_model.update(
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
@@ -117,6 +121,15 @@ def run_loss_curves(
         results["val_acc"].append(val_acc)
         results["t"].append(time.time() - t0)
     return results
+
+
+def early_stop(results: Dict[str, List[float]]) -> bool:
+    acc = results["val_acc"]
+    if not len(acc):
+        return False
+    best_it = np.argmax(acc)
+    cur_it = len(acc) - 1
+    return best_it + EARLY_STOP_EPOCHS < cur_it
 
 
 if __name__ == "__main__":

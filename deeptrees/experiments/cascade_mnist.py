@@ -5,11 +5,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeSGD, CascadeTAO
-from deeptrees.cascade_init import (
-    CascadeGradientLossInit,
-    CascadeSequentialInit,
-    CascadeTAOTreeBuilderInit,
-)
+from deeptrees.cascade_init import CascadeGradientLossInit, CascadeSequentialInit
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
@@ -28,14 +24,12 @@ def main():
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
-    model, _ = CascadeSequentialInit(
-        [
-            CascadeTAOTreeBuilderInit.regression_init_builder(
-                depth=3, out_size=size, random_prob=0.0
-            )
-            for size in (64, 32, 10)
-        ]
-    )(Batch.with_x(xs), Batch.with_x((ys[:, None] == torch.arange(10).to(ys)).float()))
+    model, _ = CascadeSequentialInit.tao_dense(
+        hidden_sizes=(64, 32, 10),
+        tree_depth=2,
+        branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
+        random_prob=0.1,
+    ).map(CascadeGradientLossInit)(Batch.with_x(xs))
     sgd_model = CascadeSGD(
         model,
         interval=5,

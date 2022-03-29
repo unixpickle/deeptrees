@@ -4,6 +4,7 @@ from abc import abstractmethod
 from typing import List, Optional, Sequence, Tuple
 
 import torch
+import torch.nn as nn
 from torch.distributions.normal import Normal
 
 from .cascade import (
@@ -106,11 +107,20 @@ class CascadeNVPPartial(CascadeNVPLayer):
         feature_mask: torch.Tensor,
         sub_layer: CascadeModule,
         no_cache_sub_inputs: bool = True,
+        learn_scale: bool = False,
     ):
         super().__init__()
         self.register_buffer("feature_mask", feature_mask)
         self.sub_layer = sub_layer
         self.no_cache_sub_inputs = no_cache_sub_inputs
+        self.learn_scale = learn_scale
+        if learn_scale:
+            self.scale = nn.Parameter(
+                torch.zeros(
+                    (~feature_mask).long().sum().item(), device=feature_mask.device
+                )
+            )
+            self.bias_scale = nn.Parameter(torch.zeros_like(self.scale))
 
     def forward(self, x: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         if ctx is not None:
@@ -162,7 +172,10 @@ class CascadeNVPPartial(CascadeNVPLayer):
     def _output_for_predictions(
         self, x: torch.Tensor, predictions: torch.Tensor, inverse: bool = False
     ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
-        log_scale, bias = torch.split(predictions, predictions.shape[1] // 2, dim=1)
+        log_scale, bias = torch.chunk(predictions, 2, dim=1)
+        if self.learn_scale:
+            log_scale = log_scale.tanh() * self.scale
+            bias = bias * self.bias_scale
         output = torch.zeros_like(x)
         output[:, self.feature_mask] = x[:, self.feature_mask]
         if inverse:

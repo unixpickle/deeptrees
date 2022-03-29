@@ -7,7 +7,11 @@ import numpy as np
 import torch
 import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeSGD
-from deeptrees.cascade_init import CascadeGradientLossInit, CascadeSequentialInit
+from deeptrees.cascade_init import (
+    CascadeGradientLossInit,
+    CascadeNVPPartialInit,
+    CascadeSequentialInit,
+)
 from deeptrees.cascade_nvp import latents_from_batch, nvp_loss, quantization_noise
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
@@ -33,12 +37,22 @@ def main():
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
+    num_layers = 24
     model, _ = (
-        CascadeSequentialInit.tao_nvp(
-            num_layers=96,
-            tree_depth=4,
-            branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
-            random_prob=0.0,
+        CascadeSequentialInit(
+            [
+                CascadeNVPPartialInit(
+                    CascadeSequentialInit.tao_dense(
+                        hidden_sizes=(64, 28 ** 2),
+                        tree_depth=2,
+                        branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
+                        random_prob=0.0,
+                    ),
+                    learn_scale=True,
+                )
+                for _ in range(num_layers // 2)
+            ],
+            nvp=True,
         )
         .map(lambda x: CascadeGradientLossInit(x, nvp=True))
         .checkpoint()(Batch.with_x(xs))

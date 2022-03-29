@@ -198,12 +198,45 @@ class CascadeLinearGatedTAOInit(CascadeTAOInit):
 
 
 @dataclass
+class CascadeNVPPartialInit(CascadeInit):
+    initializer: CascadeInit
+    learn_scale: bool = False
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        _ = targets
+        in_size = inputs.x.shape[1]
+        assert in_size % 2 == 0, "must operate on an even number of features"
+
+        sep = torch.zeros(in_size, dtype=torch.bool, device=inputs.x.device)
+        sep[torch.randperm(in_size, device=sep.device)[: in_size // 2]] = True
+
+        result = []
+        for mask in [sep, ~sep]:
+            wrapped_layers, _ = self.initializer(
+                Batch.with_x(inputs.x[:, mask]), Batch.with_x(inputs.x[:, ~mask])
+            )
+            if not isinstance(wrapped_layers, list):
+                wrapped_layers = [wrapped_layers]
+            for wrapped_layer in wrapped_layers:
+                layer = CascadeNVPPartial(
+                    mask, wrapped_layer, learn_scale=self.learn_scale
+                )
+                result.append(layer)
+                with torch.no_grad():
+                    inputs = layer(inputs)
+        return result, inputs
+
+
+@dataclass
 class CascadeTAONVPInit(CascadeInit):
     tree_depth: int
     branch_builder: TreeBranchBuilder
     reject_unimprovement: bool = True
     random_prob: float = 0.0
     regression_init: bool = False
+    learn_scale: bool = False
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
@@ -247,6 +280,7 @@ class CascadeTAONVPInit(CascadeInit):
                     branch_builder=self.branch_builder,
                     reject_unimprovement=self.reject_unimprovement,
                 ),
+                learn_scale=self.learn_scale,
             )
             result.append(layer)
             with torch.no_grad():
@@ -354,6 +388,7 @@ class CascadeSequentialInit(CascadeInit):
         random_prob: float = 0.0,
         reject_unimprovement: bool = True,
         regression_init: bool = False,
+        learn_scale: bool = False,
     ):
         assert num_layers % 2 == 0, "must have even number of layers"
         return cls(
@@ -364,6 +399,7 @@ class CascadeSequentialInit(CascadeInit):
                     random_prob=random_prob,
                     reject_unimprovement=reject_unimprovement,
                     regression_init=regression_init,
+                    learn_scale=learn_scale,
                 )
                 for _ in range(num_layers // 2)
             ],

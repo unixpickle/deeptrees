@@ -6,7 +6,15 @@ from typing import List, Optional, Sequence, Tuple
 import torch
 from torch.distributions.normal import Normal
 
-from .cascade import Batch, BatchLossFn, CascadeModule, CascadeSequential, UpdateContext
+from .cascade import (
+    Batch,
+    BatchLossFn,
+    CascadeCheckpoint,
+    CascadeGradientLoss,
+    CascadeModule,
+    CascadeSequential,
+    UpdateContext,
+)
 
 
 class CascadeNVPLayer(CascadeModule):
@@ -192,6 +200,34 @@ class CascadeNVPSequential(CascadeNVPLayer, CascadeSequential):
     @property
     def num_latents(self) -> int:
         return sum(x.num_latents for x in self.sequence)
+
+
+class CascadeNVPGradientLoss(CascadeGradientLoss, CascadeNVPLayer):
+    def evaluate_nvp(
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
+    ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        raise RuntimeError("evaluate_nvp() should not be invoked by forward()")
+
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        return self.contained.invert(outputs, latents)
+
+    @property
+    def num_latents(self) -> int:
+        return self.contained.num_latents
+
+
+class CascadeNVPCheckpoint(CascadeCheckpoint, CascadeNVPLayer):
+    def evaluate_nvp(
+        self, x: torch.Tensor, ctx: Optional[UpdateContext]
+    ) -> Tuple[torch.Tensor, Sequence[torch.Tensor], torch.Tensor]:
+        raise RuntimeError("evaluate_nvp() should not be invoked by forward()")
+
+    def invert(self, outputs: torch.Tensor, latents: Sequence[torch.Tensor]):
+        return self.contained.invert(outputs, latents)
+
+    @property
+    def num_latents(self) -> int:
+        return self.contained.num_latents
 
 
 def quantization_noise(b: torch.Tensor, noise_level=1.0 / 255.0) -> torch.Tensor:

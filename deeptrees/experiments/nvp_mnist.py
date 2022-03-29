@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeSGD
-from deeptrees.cascade_init import CascadeSequentialInit
+from deeptrees.cascade_init import CascadeGradientLossInit, CascadeSequentialInit
 from deeptrees.cascade_nvp import latents_from_batch, nvp_loss, quantization_noise
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
@@ -33,13 +33,18 @@ def main():
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
-    model, _ = CascadeSequentialInit.tao_nvp(
-        num_layers=16,
-        tree_depth=3,
-        branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
-    )(Batch.with_x(xs))
+    model, _ = (
+        CascadeSequentialInit.tao_nvp(
+            num_layers=96,
+            tree_depth=4,
+            branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
+            random_prob=0.0,
+        )
+        .map(lambda x: CascadeGradientLossInit(x, nvp=True))
+        .checkpoint()(Batch.with_x(xs))
+    )
     sgd_model = CascadeSGD(
-        model, interval=5, opt=optim.Adam(model.parameters(), lr=1e-3)
+        model, interval=5, opt=optim.Adam(model.parameters(), lr=3e-4)
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 
@@ -51,17 +56,21 @@ def main():
             batch_size=1024,
         )
         with torch.no_grad():
+            sgd_model.eval()
             test_out = sgd_model(Batch.with_x(test_xs))
             test_losses = nvp_loss(None, test_out)
+            sgd_model.train()
         print(
             f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_losses.mean().item():.05}"
         )
 
         # Produce samples
         with torch.no_grad():
+            sgd_model.eval()
             out_batch = model(Batch.with_x(test_xs[: GRID_SIZE ** 2]))
             latents = [torch.randn_like(x) for x in latents_from_batch(out_batch)]
             samples = model.invert(torch.randn_like(out_batch.x), latents)
+            sgd_model.train()
             samples = (
                 (samples * 255).clamp(0, 255).round().to(torch.uint8).cpu().numpy()
             )

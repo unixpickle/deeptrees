@@ -123,6 +123,13 @@ class UpdateContext:
 
         self._cur_autograd_cache.clear()
 
+    def has_requested_grads(self) -> bool:
+        for batch in self._cur_autograd_cache.values():
+            for x in batch.values():
+                if x.requires_grad:
+                    return True
+        return False
+
     def get_losses(self) -> torch.Tensor:
         """
         Get all of the losses concatenated from all of the backward() calls.
@@ -448,6 +455,49 @@ class CascadeGradientLoss(CascadeModule):
             return losses
 
         return self.contained.update_local(ctx, local_loss_fn)
+
+
+class CascadeCheckpoint(CascadeModule):
+    def __init__(self, contained: CascadeModule):
+        super().__init__()
+        self.contained = contained
+
+    def forward(self, x: Batch, ctx: Optional[UpdateContext] = None):
+        if ctx is None:
+            return self.contained(x)
+        ctx.cache_inputs(self, x)
+        ctx.cache_outputs(self, Batch.with_x(torch.get_rng_state()))
+        inner_ctx = UpdateContext()
+        out = self.contained(x, ctx=inner_ctx)
+        if inner_ctx.has_requested_grads():
+            out = ctx.require_grad(self, out)
+        return out
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        all_inputs = ctx.get_inputs(self, concatenate=False)
+        all_rng_states = ctx.get_outputs(self, concatenate=False)
+        all_grads = ctx.get_grads(self, concatenate=False)
+        requires_grads = len(all_grads) > 0
+
+        backup_rng_state = torch.get_rng_state()
+
+        # Re-cache all of the inner values, possibly backpropagating
+        # from the global loss function if any gradients were requested.
+        inner_ctx = UpdateContext()
+        for i, (x, rng_state) in enumerate(zip(all_inputs, all_rng_states)):
+            torch.set_rng_state(rng_state.x)
+            out = self.contained(x, ctx=inner_ctx)
+            if not requires_grads:
+                continue
+            assert len(all_grads[i]), "must have at least one downstream gradient"
+            # Use a proxy loss that will induce the correct gradients.
+            loss = 0.0
+            for k, g in all_grads[i].items():
+                loss = loss + _flat_sum(out[k] * g)
+            inner_ctx.backward(loss)
+
+        torch.set_rng_state(backup_rng_state)
+        self.contained.update_local(inner_ctx, loss_fn)
 
 
 class CascadeSGD(CascadeModule):

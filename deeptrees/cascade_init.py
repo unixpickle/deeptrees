@@ -1,7 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Sequence, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -9,34 +9,55 @@ from sklearn.tree import DecisionTreeRegressor
 
 from .cascade import (
     Batch,
+    CascadeCheckpoint,
     CascadeGradientLoss,
     CascadeLinearGatedTAO,
     CascadeModule,
     CascadeSequential,
     CascadeTAO,
 )
-from .cascade_nvp import CascadeNVPPartial, CascadeNVPSequential
+from .cascade_nvp import (
+    CascadeNVPCheckpoint,
+    CascadeNVPGradientLoss,
+    CascadeNVPPartial,
+    CascadeNVPSequential,
+)
 from .fit_base import TreeBranchBuilder
-from .fit_sklearn import SklearnRegressionTreeBuilder
-from .tree import ConstantTreeLeaf, LinearTreeLeaf, ObliqueTreeBranch, Tree
+from .fit_sklearn import SklearnLinearLeafBuilder, SklearnRegressionTreeBuilder
+from .fit_torch import TorchObliqueBranchBuilder
+from .tao import TAOTreeBuilder
+from .tree import (
+    AxisTreeBranch,
+    ConstantTreeLeaf,
+    LinearTreeLeaf,
+    ObliqueTreeBranch,
+    Tree,
+)
 
 
 @dataclass
 class CascadeInit(ABC):
     @abstractmethod
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
         """
         Initialize a sequence of modules for the current input batch.
 
         :param inputs: some sample inputs to the layer.
+        :param targets: (possibly unused) batch of targets for initializing a
+                        model grounded in real data.
         :return: a tuple (layers, outputs).
         """
 
 
 @dataclass
 class CascadeTAOInit(CascadeInit):
+    """
+    Randomly initialize a CascadeTAO layer by repeatedly halving the training
+    data along random axes.
+    """
+
     out_size: int
     tree_depth: int
     branch_builder: TreeBranchBuilder
@@ -44,8 +65,9 @@ class CascadeTAOInit(CascadeInit):
     random_prob: float = 0.0
 
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        _ = targets
         tree = random_tree(
             inputs.x, self.out_size, self.tree_depth, random_prob=self.random_prob
         )
@@ -62,10 +84,89 @@ class CascadeTAOInit(CascadeInit):
 
 
 @dataclass
+class CascadeTAOTreeBuilderInit(CascadeInit):
+    """
+    Initialize a CascadeTAO layer using a TAOTreeBuilder to initialize the tree
+    for an initial batch of data.
+    """
+
+    builder: TAOTreeBuilder
+    out_size: int
+    random_prob: float = 0.0
+
+    @classmethod
+    def regression_init_builder(
+        cls,
+        depth: int,
+        out_size: int,
+        random_prob: float = 0.0,
+        branch_builder_max_epochs: int = 50,
+        reject_unimprovement: bool = True,
+        max_iterations: int = 1,
+        **tao_kwargs,
+    ):
+        return cls(
+            builder=TAOTreeBuilder(
+                loss_fn=lambda x, y: ((x - y) ** 2).flatten(1).mean(1),
+                base_builder=SklearnRegressionTreeBuilder(
+                    estimator=DecisionTreeRegressor(max_depth=depth)
+                ),
+                leaf_builder=SklearnLinearLeafBuilder(),
+                branch_builder=TorchObliqueBranchBuilder(
+                    max_epochs=branch_builder_max_epochs
+                ),
+                reject_unimprovement=reject_unimprovement,
+                max_iterations=max_iterations,
+                **tao_kwargs,
+            ),
+            out_size=out_size,
+            random_prob=random_prob,
+        )
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        assert targets is not None
+        tree = (
+            self.builder.fit(inputs.x, targets.x)
+            .map_leaves(
+                lambda _: random_tree(
+                    xs=inputs.x,
+                    out_size=self.out_size,
+                    depth=0,
+                    random_prob=self.random_prob,
+                )
+            )
+            .map_branches(
+                lambda x: (
+                    x
+                    if not isinstance(x, AxisTreeBranch)
+                    else x.to_oblique(inputs.x, self.random_prob)
+                )
+            )
+        )
+
+        def apply_fn(module):
+            if isinstance(module, ObliqueTreeBranch):
+                module.random_prob = self.random_prob
+
+        tree.apply(apply_fn)
+        return (
+            CascadeTAO(
+                tree=tree,
+                branch_builder=self.builder.branch_builder,
+                reject_unimprovement=self.builder.reject_unimprovement,
+            ),
+            Batch.with_x(tree(inputs.x)),
+        )
+
+
+@dataclass
 class CascadeLinearGatedTAOInit(CascadeTAOInit):
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        _ = targets
         tree = random_tree(
             inputs.x,
             self.out_size,
@@ -100,8 +201,9 @@ class CascadeTAONVPInit(CascadeInit):
     regression_init: bool = False
 
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        _ = targets
         in_size = inputs.x.shape[1]
         assert in_size % 2 == 0, "must operate on an even number of features"
 
@@ -152,15 +254,39 @@ class CascadeGradientLossInit(CascadeInit):
     contained: CascadeInit
     damping: float = 0.0
     sign_only: bool = False
+    nvp: bool = False
 
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
-        module, outs = self.contained(inputs)
-        return (
-            CascadeGradientLoss(module, damping=self.damping, sign_only=self.sign_only),
-            outs,
-        )
+        module, outs = self.contained(inputs, targets)
+        wrapper = CascadeNVPGradientLoss if self.nvp else CascadeGradientLoss
+        if isinstance(module, list):
+            return [
+                wrapper(x, damping=self.damping, sign_only=self.sign_only)
+                for x in module
+            ], outs
+        else:
+            return (
+                wrapper(module, damping=self.damping, sign_only=self.sign_only),
+                outs,
+            )
+
+
+@dataclass
+class CascadeCheckpointInit(CascadeInit):
+    contained: CascadeInit
+    nvp: bool = False
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        module, outs = self.contained(inputs, targets)
+        wrapper = CascadeNVPCheckpoint if self.nvp else CascadeCheckpoint
+        if isinstance(module, list):
+            return [wrapper(x) for x in module], outs
+        else:
+            return (wrapper(module), outs)
 
 
 @dataclass
@@ -243,12 +369,35 @@ class CascadeSequentialInit(CascadeInit):
             nvp=self.nvp,
         )
 
+    def checkpoint(self, chunk_size: Optional[int] = None) -> "CascadeSequentialInit":
+        """
+        Wrap sub-sequences of modules with CascadeCheckpointInit.
+
+        :param chunk_size: the number of modules per wrapped sequence. If not
+                           specified, the sqrt() of all modules is used.
+        """
+        if chunk_size is None:
+            chunk_size = round(math.sqrt(len(self.initializers)))
+        if not chunk_size or chunk_size == len(self.initializers):
+            return self
+        results = []
+        for i in range(0, len(self.initializers), chunk_size):
+            results.append(
+                CascadeCheckpointInit(
+                    CascadeSequentialInit(
+                        self.initializers[i : i + chunk_size], nvp=self.nvp
+                    ),
+                    nvp=self.nvp,
+                )
+            )
+        return CascadeSequentialInit(results, nvp=self.nvp)
+
     def __call__(
-        self, inputs: Batch
+        self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
         result = []
         for x in self.initializers:
-            layers, inputs = x(inputs)
+            layers, inputs = x(inputs, targets)
             if isinstance(layers, list):
                 result.extend(layers)
             else:

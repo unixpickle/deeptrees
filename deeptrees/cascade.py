@@ -438,10 +438,10 @@ class CascadeGradientLoss(CascadeModule):
             x0 = original_out.at_indices(indices)
             for k, g in gradient.at_indices(indices).items():
                 if self.damping:
-                    losses = losses + self.damping * (
+                    losses = losses + self.damping * _flat_sum(
                         (outputs[k] - x0[k]) ** 2
-                    ).flatten(1).sum(1)
-                dots = ((outputs[k] - x0[k]) * g).flatten(1).sum(1)
+                    )
+                dots = _flat_sum((outputs[k] - x0[k]) * g)
                 if self.sign_only:
                     dots = dots.sign().float()
                 losses = losses + dots
@@ -490,3 +490,10 @@ class CascadeSGD(CascadeModule):
                 self.optimizer.step()
                 self.optimizer.zero_grad()
             return torch.cat(all_losses, dim=0)
+
+
+def _flat_sum(x: torch.Tensor) -> torch.Tensor:
+    assert len(x.shape) >= 1
+    if len(x.shape) == 1:
+        return x
+    return x.flatten(1).sum(1)

@@ -63,13 +63,18 @@ class CascadeTAOInit(CascadeInit):
     branch_builder: TreeBranchBuilder
     reject_unimprovement: bool = True
     random_prob: float = 0.0
+    zero_init_out: bool = False
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
         _ = targets
         tree = random_tree(
-            inputs.x, self.out_size, self.tree_depth, random_prob=self.random_prob
+            inputs.x,
+            self.out_size,
+            self.tree_depth,
+            random_prob=self.random_prob,
+            zero_init_out=self.zero_init_out,
         )
         with torch.no_grad():
             inputs = Batch.with_x(tree(inputs.x))
@@ -302,6 +307,7 @@ class CascadeSequentialInit(CascadeInit):
         branch_builder: TreeBranchBuilder,
         random_prob: float = 0.0,
         reject_unimprovement: bool = True,
+        zero_init_out: bool = False,
     ):
         return cls(
             [
@@ -311,8 +317,9 @@ class CascadeSequentialInit(CascadeInit):
                     branch_builder=branch_builder,
                     random_prob=random_prob,
                     reject_unimprovement=reject_unimprovement,
+                    zero_init_out=zero_init_out and i + 1 == len(hidden_sizes),
                 )
-                for x in hidden_sizes
+                for i, x in enumerate(hidden_sizes)
             ]
         )
 
@@ -413,6 +420,7 @@ def random_tree(
     depth: int,
     random_prob: float = 0.0,
     constant_leaf: bool = False,
+    zero_init_out: bool = False,
 ) -> Tree:
     in_size = xs.shape[1]
     if depth == 0:
@@ -420,7 +428,11 @@ def random_tree(
             return ConstantTreeLeaf(torch.zeros(out_size).to(xs))
         else:
             return LinearTreeLeaf(
-                coef=torch.randn(size=(in_size, out_size)).to(xs) / math.sqrt(in_size),
+                coef=(
+                    torch.randn(size=(in_size, out_size)).to(xs) / math.sqrt(in_size)
+                    if not zero_init_out
+                    else torch.zeros(in_size, out_size).to(xs)
+                ),
                 bias=torch.zeros(out_size).to(xs),
             )
     split_direction = torch.randn(in_size).to(xs)
@@ -429,10 +441,18 @@ def random_tree(
     decision = dots > threshold
     return ObliqueTreeBranch(
         left=random_tree(
-            xs[~decision], out_size, depth - 1, constant_leaf=constant_leaf
+            xs[~decision],
+            out_size,
+            depth - 1,
+            constant_leaf=constant_leaf,
+            zero_init_out=zero_init_out,
         ),
         right=random_tree(
-            xs[decision], out_size, depth - 1, constant_leaf=constant_leaf
+            xs[decision],
+            out_size,
+            depth - 1,
+            constant_leaf=constant_leaf,
+            zero_init_out=zero_init_out,
         ),
         coef=split_direction,
         threshold=threshold,

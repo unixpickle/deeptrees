@@ -5,6 +5,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Un
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from .fit_base import TreeBranchBuilder
@@ -33,6 +34,12 @@ class Batch(dict):
     @property
     def x(self) -> torch.Tensor:
         return self["x"]
+
+    def change_x(self, x: torch.Tensor) -> "Batch":
+        assert "x" in self
+        result = Batch(self)
+        result["x"] = x
+        return result
 
     def detach(self) -> "Batch":
         return Batch({k: v.detach() for k, v in self.items()})
@@ -498,6 +505,84 @@ class CascadeCheckpoint(CascadeModule):
 
         torch.set_rng_state(backup_rng_state)
         self.contained.update_local(inner_ctx, loss_fn)
+
+
+class CascadeConv(CascadeModule):
+    """
+    Wrap a sub-module to be applied to patches of an N-d input signal.
+
+    Since the sub-module is applied per patch rather than per sample, the
+    downstream loss function cannot be evaluated directly for TAO.
+    Rather, the inner block will receive a local linear approximation of the
+    loss function based on per-patch gradient information.
+
+    Input Tensors are assumed to be in NCH/NCHW/NCHWT order.
+    """
+
+    def __init__(
+        self, contained: CascadeModule, kernel_size: int, stride: int, padding: int
+    ):
+        super().__init__()
+        self.contained = contained
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        x = self._extract_image_patches(inputs.x)
+
+        # Run in the sub-module as one large (2D) batch.
+        batch = (
+            x.reshape(x.shape[0], x.shape[1], -1)
+            .permute(0, 2, 1)
+            .reshape(-1, x.shape[1])
+        )
+        out = self.contained(inputs.change_x(batch), ctx)
+
+        # Convert back to an N-d batch, but with a different number of channels.
+        spatial = out.x
+        out_ch = spatial.shape[1]
+        spatial = (
+            spatial.reshape(x.shape[0], -1, out_ch)
+            .permute(0, 2, 1)
+            .reshape(x.shape[0], out_ch, *x.shape[2:])
+        )
+        out = out.change_x(spatial)
+
+        ctx.cache_outputs(self, out)
+        return ctx.require_grad(self, out)
+
+    def _extract_image_patches(self, x: torch.Tensor) -> torch.Tensor:
+        pad_tuple = (self.padding,) * 2 * len(x.shape - 2)
+        x = F.pad(x, pad_tuple)
+        for i in range(2, len(x.shape)):
+            x = x.unfold(i, self.kernel_size, self.stride)
+            # Dimension i is replaced with (k, kernel_size). We want to fold in
+            # kernel_size (i.e. the patch contents) with the channels dimension.
+            perm = list(range(len(x.shape)))
+            del perm[i + 1]
+            perm.insert(1, i + 1)
+            x = x.permute(perm)
+            new_shape = list(x.shape)
+            del new_shape[1]
+            new_shape[1] = -1
+            x = x.reshape(new_shape)
+        return x
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = loss_fn
+        original_out = ctx.get_outputs(self)
+        gradient = ctx.get_grads(self)
+        assert len(gradient), "at least one output must have gradient info"
+
+        def local_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+            losses = 0.0
+            x0 = original_out.at_indices(indices)
+            for k, g in gradient.at_indices(indices).items():
+                losses = losses + _flat_sum((outputs[k] - x0[k]) * g)
+            return losses
+
+        return self.contained.update_local(ctx, local_loss_fn)
 
 
 class CascadeSGD(CascadeModule):

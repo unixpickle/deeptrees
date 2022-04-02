@@ -266,6 +266,21 @@ class CascadeSequential(CascadeModule):
             self.sequence[i].update_local(ctx, child_loss_fn)
 
 
+class CascadeFlatten(CascadeModule):
+    """
+    Flatten the input tensor to be lower dimensional.
+    """
+
+    def __init__(self, start_dim: int = 1, end_dim: int = -1):
+        super().__init__()
+        self.start_dim = start_dim
+        self.end_dim = end_dim
+
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        _ = ctx
+        return inputs.change_x(inputs.x.flatten(self.start_dim, self.end_dim))
+
+
 class CascadeTAO(CascadeModule):
     """
     A tree in a cascade module that uses TAO for updates.

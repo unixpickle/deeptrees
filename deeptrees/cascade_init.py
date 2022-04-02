@@ -54,6 +54,19 @@ class CascadeInit(ABC):
 
 
 @dataclass
+class CascadeRawInit(CascadeInit):
+    module: CascadeModule
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        with torch.no_grad():
+            inputs = self.module(inputs)
+        _ = targets
+        return self.module, inputs
+
+
+@dataclass
 class CascadeTAOInit(CascadeInit):
     """
     Randomly initialize a CascadeTAO layer by repeatedly halving the training

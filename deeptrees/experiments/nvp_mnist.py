@@ -53,6 +53,7 @@ def main():
                 for _ in range(num_layers // 2)
             ],
             nvp=True,
+            flatten=True,
         )
         .map(lambda x: CascadeGradientLossInit(x, nvp=True))
         .checkpoint()(Batch.with_x(xs))

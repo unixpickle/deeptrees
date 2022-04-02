@@ -42,14 +42,14 @@ class CascadeInit(ABC):
     @abstractmethod
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         """
-        Initialize a sequence of modules for the current input batch.
+        Initialize a module for the current input batch.
 
         :param inputs: some sample inputs to the layer.
         :param targets: (possibly unused) batch of targets for initializing a
                         model grounded in real data.
-        :return: a tuple (layers, outputs).
+        :return: a tuple (layer, outputs).
         """
 
 
@@ -59,7 +59,7 @@ class CascadeRawInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         with torch.no_grad():
             inputs = self.module(inputs)
         _ = targets
@@ -82,7 +82,7 @@ class CascadeTAOInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         _ = targets
         tree = random_tree(
             inputs.x,
@@ -145,7 +145,7 @@ class CascadeTAOTreeBuilderInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         assert targets is not None
         tree = (
             self.builder.fit(inputs.x, targets.x)
@@ -185,7 +185,7 @@ class CascadeTAOTreeBuilderInit(CascadeInit):
 class CascadeLinearGatedTAOInit(CascadeTAOInit):
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         _ = targets
         tree = random_tree(
             inputs.x,
@@ -219,7 +219,7 @@ class CascadeNVPPartialInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         _ = targets
         in_size = inputs.x.shape[1]
         assert in_size % 2 == 0, "must operate on an even number of features"
@@ -229,19 +229,14 @@ class CascadeNVPPartialInit(CascadeInit):
 
         result = []
         for mask in [sep, ~sep]:
-            wrapped_layers, _ = self.initializer(
+            wrapped_layer, _ = self.initializer(
                 Batch.with_x(inputs.x[:, mask]), Batch.with_x(inputs.x[:, ~mask])
             )
-            if not isinstance(wrapped_layers, list):
-                wrapped_layers = [wrapped_layers]
-            for wrapped_layer in wrapped_layers:
-                layer = CascadeNVPPartial(
-                    mask, wrapped_layer, learn_scale=self.learn_scale
-                )
-                result.append(layer)
-                with torch.no_grad():
-                    inputs = layer(inputs)
-        return result, inputs
+            layer = CascadeNVPPartial(mask, wrapped_layer, learn_scale=self.learn_scale)
+            result.append(layer)
+            with torch.no_grad():
+                inputs = layer(inputs)
+        return CascadeNVPSequential(result), inputs
 
 
 @dataclass
@@ -255,7 +250,7 @@ class CascadeTAONVPInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         _ = targets
         in_size = inputs.x.shape[1]
         assert in_size % 2 == 0, "must operate on an even number of features"
@@ -300,7 +295,7 @@ class CascadeTAONVPInit(CascadeInit):
             result.append(layer)
             with torch.no_grad():
                 inputs = layer(inputs)
-        return result, inputs
+        return CascadeNVPSequential(result), inputs
 
 
 @dataclass
@@ -312,19 +307,10 @@ class CascadeGradientLossInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         module, outs = self.contained(inputs, targets)
         wrapper = CascadeNVPGradientLoss if self.nvp else CascadeGradientLoss
-        if isinstance(module, list):
-            return [
-                wrapper(x, damping=self.damping, sign_only=self.sign_only)
-                for x in module
-            ], outs
-        else:
-            return (
-                wrapper(module, damping=self.damping, sign_only=self.sign_only),
-                outs,
-            )
+        return wrapper(module, damping=self.damping, sign_only=self.sign_only), outs
 
 
 @dataclass
@@ -334,19 +320,17 @@ class CascadeCheckpointInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         module, outs = self.contained(inputs, targets)
         wrapper = CascadeNVPCheckpoint if self.nvp else CascadeCheckpoint
-        if isinstance(module, list):
-            return [wrapper(x) for x in module], outs
-        else:
-            return (wrapper(module), outs)
+        return wrapper(module), outs
 
 
 @dataclass
 class CascadeSequentialInit(CascadeInit):
     initializers: Sequence[CascadeInit]
     nvp: bool = False
+    flatten: bool = False
 
     @classmethod
     def tao_dense(
@@ -419,6 +403,7 @@ class CascadeSequentialInit(CascadeInit):
                 for _ in range(num_layers // 2)
             ],
             nvp=True,
+            flatten=True,
         )
 
     def map(self, fn: Callable[[CascadeInit], CascadeInit]) -> "CascadeSequentialInit":
@@ -452,14 +437,14 @@ class CascadeSequentialInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         result = []
         for x in self.initializers:
-            layers, inputs = x(inputs, targets)
-            if isinstance(layers, list):
-                result.extend(layers)
+            module, inputs = x(inputs, targets)
+            if self.flatten and isinstance(module, CascadeSequential):
+                result.extend(module)
             else:
-                result.append(layers)
+                result.append(module)
         return (CascadeSequential if not self.nvp else CascadeNVPSequential)(
             result
         ), inputs
@@ -474,7 +459,7 @@ class CascadeConvInit(CascadeInit):
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
-    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+    ) -> Tuple[CascadeModule, Batch]:
         x = extract_image_patches(
             inputs.x,
             kernel_size=self.kernel_size,

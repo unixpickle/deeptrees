@@ -553,21 +553,7 @@ class CascadeConv(CascadeModule):
         return ctx.require_grad(self, out)
 
     def _extract_image_patches(self, x: torch.Tensor) -> torch.Tensor:
-        pad_tuple = (self.padding,) * 2 * len(x.shape - 2)
-        x = F.pad(x, pad_tuple)
-        for i in range(2, len(x.shape)):
-            x = x.unfold(i, self.kernel_size, self.stride)
-            # Dimension i is replaced with (k, kernel_size). We want to fold in
-            # kernel_size (i.e. the patch contents) with the channels dimension.
-            perm = list(range(len(x.shape)))
-            del perm[i + 1]
-            perm.insert(1, i + 1)
-            x = x.permute(perm)
-            new_shape = list(x.shape)
-            del new_shape[1]
-            new_shape[1] = -1
-            x = x.reshape(new_shape)
-        return x
+        return extract_image_patches(x, self.kernel_size, self.stride, self.padding)
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         _ = loss_fn
@@ -632,3 +618,23 @@ def _flat_sum(x: torch.Tensor) -> torch.Tensor:
     if len(x.shape) == 1:
         return x
     return x.flatten(1).sum(1)
+
+
+def extract_image_patches(
+    x: torch.Tensor, kernel_size: int, stride: int, padding: int
+) -> torch.Tensor:
+    pad_tuple = (padding,) * 2 * len(x.shape - 2)
+    x = F.pad(x, pad_tuple)
+    for i in range(2, len(x.shape)):
+        x = x.unfold(i, kernel_size, stride)
+        # Dimension i is replaced with (k, kernel_size). We want to fold in
+        # kernel_size (i.e. the patch contents) with the channels dimension.
+        perm = list(range(len(x.shape)))
+        del perm[i + 1]
+        perm.insert(1, i + 1)
+        x = x.permute(perm)
+        new_shape = list(x.shape)
+        del new_shape[1]
+        new_shape[1] = -1
+        x = x.reshape(new_shape)
+    return x

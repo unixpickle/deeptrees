@@ -10,11 +10,13 @@ from sklearn.tree import DecisionTreeRegressor
 from .cascade import (
     Batch,
     CascadeCheckpoint,
+    CascadeConv,
     CascadeGradientLoss,
     CascadeLinearGatedTAO,
     CascadeModule,
     CascadeSequential,
     CascadeTAO,
+    extract_image_patches,
 )
 from .cascade_nvp import (
     CascadeNVPCheckpoint,
@@ -448,6 +450,41 @@ class CascadeSequentialInit(CascadeInit):
         return (CascadeSequential if not self.nvp else CascadeNVPSequential)(
             result
         ), inputs
+
+
+@dataclass
+class CascadeConvInit(CascadeInit):
+    contained: CascadeInit
+    kernel_size: int
+    stride: int
+    padding: int
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[Union[CascadeModule, List[CascadeModule]], Batch]:
+        x = extract_image_patches(
+            inputs.x,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+        )
+        batch = (
+            x.reshape(x.shape[0], x.shape[1], -1)
+            .permute(0, 2, 1)
+            .reshape(-1, x.shape[1])
+        )
+        layers, _ = self.contained(inputs.with_x(batch), targets)
+        if isinstance(layers, list):
+            layers = CascadeSequential(layers)
+        result_module = CascadeConv(
+            contained=layers,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+        )
+        with torch.no_grad():
+            inputs = result_module(inputs)
+        return result_module, inputs
 
 
 def random_tree(

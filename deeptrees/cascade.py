@@ -237,7 +237,7 @@ class CascadeModule(nn.Module, ABC):
                                  the sub-batches even further.
         :return: a 1-D tensor of pre-update losses.
         """
-        losses = []
+        all_losses = []
         for indices, outer_batch in full_batch.batches(
             outer_batch_size or len(full_batch)
         ):
@@ -249,8 +249,8 @@ class CascadeModule(nn.Module, ABC):
                 ctx.backward(losses)
                 del losses  # possibly save memory if backward() didn't destroy graph.
             self.update_local(ctx, loss_fn)
-            losses.append(ctx.get_losses())
-        return torch.cat(losses, dim=0)
+            all_losses.append(ctx.get_losses())
+        return torch.cat(all_losses, dim=0)
 
 
 class CascadeSequential(CascadeModule):

@@ -58,13 +58,21 @@ class Batch(dict):
             }
         )
 
-    def batches(self, batch_size: int) -> Iterator[Tuple[torch.Tensor, "Batch"]]:
+    def batches(
+        self, batch_size: int, shuffle: bool = False
+    ) -> Iterator[Tuple[torch.Tensor, "Batch"]]:
         size = len(self)
-        indices = torch.arange(size)
-        for i in range(0, size, batch_size):
-            yield indices[i : i + batch_size], Batch(
-                {k: v[i : i + batch_size] for k, v in self.items()}
-            )
+        if not shuffle:
+            indices = torch.arange(size)
+            for i in range(0, size, batch_size):
+                yield indices[i : i + batch_size], Batch(
+                    {k: v[i : i + batch_size] for k, v in self.items()}
+                )
+        else:
+            indices = torch.randperm(size)
+            for i in range(0, size, batch_size):
+                sub_indices = indices[i : i + batch_size]
+                yield sub_indices, Batch({k: v[sub_indices] for k, v in self.items()})
 
     def __len__(self) -> int:
         return len(next(iter(self.values())))
@@ -239,7 +247,7 @@ class CascadeModule(nn.Module, ABC):
         """
         all_losses = []
         for indices, outer_batch in full_batch.batches(
-            outer_batch_size or len(full_batch)
+            outer_batch_size or len(full_batch), shuffle=True
         ):
 
             def inner_loss_fn(
@@ -661,7 +669,9 @@ class CascadeSGD(CascadeModule):
         else:
             self.optimizer.zero_grad()
             all_losses = []
-            for indices, sub_batch in full_batch.batches(batch_size or len(full_batch)):
+            for indices, sub_batch in full_batch.batches(
+                batch_size or len(full_batch), shuffle=True
+            ):
                 losses = loss_fn(indices, self(sub_batch))
                 all_losses.append(losses.detach())
                 losses.mean().backward()

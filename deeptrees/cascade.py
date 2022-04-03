@@ -636,11 +636,11 @@ def extract_image_patches(
     x = F.pad(x, pad_tuple)
     for i in range(2, len(x.shape)):
         x = x.unfold(i, kernel_size, stride)
-        # Dimension i is replaced with (k, kernel_size). We want to fold in
-        # kernel_size (i.e. the patch contents) with the channels dimension.
+        # Another dimension, kernel_size, is appended to the shape.
+        # Here, we fold it into the channel dimension.
         perm = list(range(len(x.shape)))
-        del perm[i + 1]
-        perm.insert(1, i + 1)
+        del perm[-1]
+        perm.insert(1, len(perm))
         x = x.permute(perm)
         new_shape = list(x.shape)
         del new_shape[1]

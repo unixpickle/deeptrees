@@ -238,8 +238,9 @@ class CascadeModule(nn.Module, ABC):
         :return: a 1-D tensor of pre-update losses.
         """
         all_losses = []
-        shuffled, perm_inverse = _shuffle_with_inverse(full_batch)
+        shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
         for indices, outer_batch in shuffled.batches(outer_batch_size or len(shuffled)):
+            indices = perm[indices]
 
             def inner_loss_fn(
                 inner_indices: torch.Tensor, batch: Batch
@@ -660,9 +661,9 @@ class CascadeSGD(CascadeModule):
         else:
             self.optimizer.zero_grad()
             all_losses = []
-            shuffled, perm_inverse = _shuffle_with_inverse(full_batch)
+            shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
             for indices, sub_batch in shuffled.batches(batch_size or len(shuffled)):
-                losses = loss_fn(indices, self(sub_batch))
+                losses = loss_fn(perm[indices], self(sub_batch))
                 all_losses.append(losses.detach())
                 losses.mean().backward()
                 self.optimizer.step()
@@ -677,11 +678,11 @@ def _flat_sum(x: torch.Tensor) -> torch.Tensor:
     return x.flatten(1).sum(1)
 
 
-def _shuffle_with_inverse(batch: Batch) -> Tuple[Batch, torch.Tensor]:
+def _shuffle_with_inverse(batch: Batch) -> Tuple[Batch, torch.Tensor, torch.Tensor]:
     indices = torch.randperm(len(batch))
     inverse = torch.zeros_like(indices)
     inverse[indices] = torch.arange(len(batch))
-    return batch.at_indices(indices), inverse
+    return batch.at_indices(indices), indices, inverse
 
 
 def extract_image_patches(

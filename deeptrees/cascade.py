@@ -241,14 +241,20 @@ class CascadeModule(nn.Module, ABC):
         for indices, outer_batch in full_batch.batches(
             outer_batch_size or len(full_batch)
         ):
+
+            def inner_loss_fn(
+                inner_indices: torch.Tensor, batch: Batch
+            ) -> torch.Tensor:
+                return loss_fn(indices[inner_indices], batch)
+
             ctx = UpdateContext()
-            for indices, sub_batch in outer_batch.batches(
+            for sub_indices, sub_batch in outer_batch.batches(
                 batch_size or len(outer_batch)
             ):
-                losses = loss_fn(indices, self(sub_batch, ctx=ctx))
+                losses = inner_loss_fn(sub_indices, self(sub_batch, ctx=ctx))
                 ctx.backward(losses)
                 del losses  # possibly save memory if backward() didn't destroy graph.
-            self.update_local(ctx, loss_fn)
+            self.update_local(ctx, inner_loss_fn)
             all_losses.append(ctx.get_losses())
         return torch.cat(all_losses, dim=0)
 

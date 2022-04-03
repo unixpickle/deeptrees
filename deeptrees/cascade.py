@@ -213,7 +213,11 @@ class CascadeModule(nn.Module, ABC):
         """
 
     def update(
-        self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None
+        self,
+        full_batch: Batch,
+        loss_fn: BatchLossFn,
+        batch_size: Optional[int] = None,
+        outer_batch_size: Optional[int] = None,
     ) -> torch.Tensor:
         """
         Update the parameters of the module and all its submodules given the
@@ -227,15 +231,26 @@ class CascadeModule(nn.Module, ABC):
         :param loss_fn: the global loss function.
         :param batch_size: if specified, split the batch up into minibatches
                            during the initial forward/backward passes.
+        :param outer_batch_size: if specified, potentially perform multiple
+                                 update_local() calls. Within each call, the
+                                 other batch_size argument is used to split up
+                                 the sub-batches even further.
         :return: a 1-D tensor of pre-update losses.
         """
-        ctx = UpdateContext()
-        for indices, sub_batch in full_batch.batches(batch_size or len(full_batch)):
-            losses = loss_fn(indices, self(sub_batch, ctx=ctx))
-            ctx.backward(losses)
-            del losses  # possibly save memory if backward() didn't destroy graph.
-        self.update_local(ctx, loss_fn)
-        return ctx.get_losses()
+        losses = []
+        for indices, outer_batch in full_batch.batches(
+            outer_batch_size or len(full_batch)
+        ):
+            ctx = UpdateContext()
+            for indices, sub_batch in outer_batch.batches(
+                batch_size or len(outer_batch)
+            ):
+                losses = loss_fn(indices, self(sub_batch, ctx=ctx))
+                ctx.backward(losses)
+                del losses  # possibly save memory if backward() didn't destroy graph.
+            self.update_local(ctx, loss_fn)
+            losses.append(ctx.get_losses())
+        return torch.cat(losses, dim=0)
 
 
 class CascadeSequential(CascadeModule):
@@ -279,6 +294,19 @@ class CascadeFlatten(CascadeModule):
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         _ = ctx
         return inputs.change_x(inputs.x.flatten(self.start_dim, self.end_dim))
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = ctx, loss_fn
+
+
+class CascadeFn(CascadeModule):
+    def __init__(self, fn: Callable[[torch.Tensor], torch.Tensor]):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        _ = ctx
+        return x.change_x(self.fn(x.x))
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         _ = ctx, loss_fn
@@ -586,7 +614,12 @@ class CascadeSGD(CascadeModule):
     frequent recursive update() calls.
     """
 
-    def __init__(self, contained: CascadeModule, interval: int, opt: optim.Optimizer):
+    def __init__(
+        self,
+        contained: CascadeModule,
+        interval: int,
+        opt: optim.Optimizer,
+    ):
         super().__init__()
         self.contained = contained
         self.interval = interval
@@ -605,11 +638,20 @@ class CascadeSGD(CascadeModule):
         self.contained.update_local(ctx, loss_fn)
 
     def update(
-        self, full_batch: Batch, loss_fn: BatchLossFn, batch_size: Optional[int] = None
+        self,
+        full_batch: Batch,
+        loss_fn: BatchLossFn,
+        batch_size: Optional[int] = None,
+        outer_batch_size: Optional[int] = None,
     ) -> torch.Tensor:
         self.step.add_(1)
         if self.step.item() % self.interval == 0:
-            return super().update(full_batch, loss_fn, batch_size=batch_size)
+            return super().update(
+                full_batch,
+                loss_fn,
+                batch_size=batch_size,
+                outer_batch_size=outer_batch_size,
+            )
         else:
             self.optimizer.zero_grad()
             all_losses = []

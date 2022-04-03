@@ -30,14 +30,15 @@ def main():
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
+    init_batch_size = 2048
     tao_args = dict(
         tree_depth=2,
         branch_builder=TorchObliqueBranchBuilder(
-            max_epochs=50,
+            max_epochs=1,
             optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
-            converge_epochs=3,
         ),
         random_prob=0.1,
+        reject_unimprovement=False,
     )
     model, _ = CascadeSequentialInit(
         [
@@ -56,7 +57,7 @@ def main():
             CascadeRawInit(CascadeFlatten()),
             CascadeTAOInit(out_size=10, **tao_args),
         ]
-    ).map(CascadeGradientLossInit)(Batch.with_x(xs))
+    ).map(CascadeGradientLossInit)(Batch.with_x(xs[:init_batch_size]))
     sgd_model = CascadeSGD(
         model,
         interval=5,
@@ -71,6 +72,7 @@ def main():
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
             batch_size=1024,
+            outer_batch_size=10000,
         )
         with torch.no_grad():
             sgd_model.eval()

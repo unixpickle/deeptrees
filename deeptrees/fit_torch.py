@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from .fit_base import TreeBranchBuilder
-from .tree import ObliqueTreeBranch, TreeBranch
+from .tree import ObliqueTreeBranch, Tree, TreeBranch
 
 
 @dataclass
@@ -25,6 +25,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
     max_epochs: int = 1000
     batch_size: Optional[int] = 1024
     warm_start: bool = True
+    reset_optimizer: bool = False
 
     def fit_branch(
         self,
@@ -54,14 +55,18 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             # The SVM solver doesn't when one class has near-zero weight.
             return cur_branch
 
-        weight = nn.Parameter(torch.zeros_like(xs[0]))
-        bias = nn.Parameter(torch.zeros_like(weight[0]))
-        if self.warm_start and isinstance(cur_branch, ObliqueTreeBranch):
-            with torch.no_grad():
-                weight.copy_(cur_branch.coef)
-                bias.copy_(cur_branch.threshold)
+        if self.warm_start and isinstance(cur_branch, _StatefulObliqueTreeBranch):
+            # These parameters are tied to the optimizer.
+            weight = cur_branch.state["weight"]
+            bias = cur_branch.state["bias"]
+            opt = cur_branch.state["opt"]
+        else:
+            weight = nn.Parameter(torch.zeros_like(xs[0]))
+            bias = nn.Parameter(torch.zeros_like(weight[0]))
+            opt = None
 
-        opt = self.optimizer([weight, bias], **self.optimizer_kwargs)
+        if opt is None or self.reset_optimizer:
+            opt = self.optimizer([weight, bias], **self.optimizer_kwargs)
 
         if self.batch_size is None:
             batch_size = len(xs)
@@ -99,12 +104,23 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             if self.should_terminate(history):
                 break
 
-        return ObliqueTreeBranch(
+        kwargs = dict(
             left=cur_branch.left,
             right=cur_branch.right,
-            coef=weight.detach(),
-            threshold=bias.detach(),
+            coef=weight.detach().clone(),
+            threshold=bias.detach().clone(),
         )
+        if self.warm_start:
+            return _StatefulObliqueTreeBranch(
+                state=dict(
+                    weight=weight,
+                    bias=bias,
+                    opt=opt,
+                ),
+                **kwargs,
+            )
+        else:
+            return ObliqueTreeBranch(**kwargs)
 
     def should_terminate(self, history: List[float]) -> bool:
         if len(history) <= self.converge_epochs:
@@ -113,3 +129,21 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             sum(history[-(self.converge_epochs + 1) : -1]) / self.converge_epochs
         )
         return history[-1] > prev_mean
+
+
+class _StatefulObliqueTreeBranch(ObliqueTreeBranch):
+    def __init__(
+        self, state: Dict[str, Union[optim.Optimizer, nn.Parameter]], **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.state = state
+
+    def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
+        return _StatefulObliqueTreeBranch(
+            state=self.state,
+            left=left,
+            right=right,
+            coef=self.coef,
+            threshold=self.threshold,
+            random_prob=self.random_prob,
+        )

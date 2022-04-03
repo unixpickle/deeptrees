@@ -68,14 +68,15 @@ def main():
 
 
 def dataset_to_tensors(
-    dataset: Union[MNIST, FashionMNIST]
+    dataset: Union[MNIST, FashionMNIST], spatial=False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     images = []
     labels = []
+    shape = (-1,) if not spatial else (1, 28, 28)
     for i in range(len(dataset)):
         img, target = dataset[i]
         images.append(
-            torch.from_numpy(np.array(img.convert("RGB"))[..., 0]).view(-1).float()
+            torch.from_numpy(np.array(img.convert("RGB"))[..., 0]).view(shape).float()
             / 255
         )
         labels.append(target)

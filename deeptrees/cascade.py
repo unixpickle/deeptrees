@@ -280,6 +280,9 @@ class CascadeFlatten(CascadeModule):
         _ = ctx
         return inputs.change_x(inputs.x.flatten(self.start_dim, self.end_dim))
 
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = ctx, loss_fn
+
 
 class CascadeTAO(CascadeModule):
     """
@@ -547,25 +550,16 @@ class CascadeConv(CascadeModule):
         x = self._extract_image_patches(inputs.x)
 
         # Run in the sub-module as one large (2D) batch.
-        batch = (
-            x.reshape(x.shape[0], x.shape[1], -1)
-            .permute(0, 2, 1)
-            .reshape(-1, x.shape[1])
-        )
-        out = self.contained(inputs.change_x(batch), ctx)
+        flat_in = inputs.change_x(flatten_image_patches(x))
+        out = self.contained(flat_in, ctx)
+
+        # Request the output/gradient of the sub-module for the loss.
+        if ctx is not None:
+            ctx.cache_outputs(self, out)
+            out = ctx.require_grad(self, out)
 
         # Convert back to an N-d batch, but with a different number of channels.
-        spatial = out.x
-        out_ch = spatial.shape[1]
-        spatial = (
-            spatial.reshape(x.shape[0], -1, out_ch)
-            .permute(0, 2, 1)
-            .reshape(x.shape[0], out_ch, *x.shape[2:])
-        )
-        out = out.change_x(spatial)
-
-        ctx.cache_outputs(self, out)
-        return ctx.require_grad(self, out)
+        return out.change_x(undo_image_patches(x, out.x))
 
     def _extract_image_patches(self, x: torch.Tensor) -> torch.Tensor:
         return extract_image_patches(x, self.kernel_size, self.stride, self.padding)
@@ -638,7 +632,7 @@ def _flat_sum(x: torch.Tensor) -> torch.Tensor:
 def extract_image_patches(
     x: torch.Tensor, kernel_size: int, stride: int, padding: int
 ) -> torch.Tensor:
-    pad_tuple = (padding,) * 2 * len(x.shape - 2)
+    pad_tuple = (padding,) * 2 * (len(x.shape) - 2)
     x = F.pad(x, pad_tuple)
     for i in range(2, len(x.shape)):
         x = x.unfold(i, kernel_size, stride)
@@ -653,3 +647,18 @@ def extract_image_patches(
         new_shape[1] = -1
         x = x.reshape(new_shape)
     return x
+
+
+def flatten_image_patches(x: torch.Tensor) -> torch.Tensor:
+    return (
+        x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1).reshape(-1, x.shape[1])
+    )
+
+
+def undo_image_patches(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    out_ch = y.shape[1]
+    return (
+        y.reshape(x.shape[0], -1, out_ch)
+        .permute(0, 2, 1)
+        .reshape(x.shape[0], out_ch, *x.shape[2:])
+    )

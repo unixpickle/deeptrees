@@ -4,37 +4,65 @@ from typing import Tuple, Union
 import numpy as np
 import torch
 import torch.optim as optim
-from deeptrees.cascade import Batch, CascadeSGD, CascadeTAO
-from deeptrees.cascade_init import CascadeGradientLossInit, CascadeSequentialInit
+from deeptrees.cascade import Batch, CascadeFlatten, CascadeSGD, CascadeTAO
+from deeptrees.cascade_init import (
+    CascadeConvInit,
+    CascadeGradientLossInit,
+    CascadeRawInit,
+    CascadeSequentialInit,
+    CascadeTAOInit,
+)
 from deeptrees.experiments.boosting_mnist import dataset_to_tensors
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
-from torchvision.datasets.mnist import MNIST, FashionMNIST
+from torchvision.datasets.mnist import MNIST
 
 
 def main():
     print("loading data...")
     train_dataset = MNIST("./mnist_data", train=True, download=True)
     test_dataset = MNIST("./mnist_data", train=False, download=True)
-    xs, ys = dataset_to_tensors(train_dataset)
-    test_xs, test_ys = dataset_to_tensors(test_dataset)
+    xs, ys = dataset_to_tensors(train_dataset, spatial=True)
+    test_xs, test_ys = dataset_to_tensors(test_dataset, spatial=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
     print("initializing TAO model...")
-    model, _ = CascadeSequentialInit.tao_dense(
-        hidden_sizes=(64, 32, 10),
+    tao_args = dict(
         tree_depth=2,
-        branch_builder=TorchObliqueBranchBuilder(max_epochs=50),
+        branch_builder=TorchObliqueBranchBuilder(
+            max_epochs=50,
+            optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
+            converge_epochs=3,
+        ),
         random_prob=0.1,
+    )
+    model, _ = CascadeSequentialInit(
+        [
+            CascadeConvInit(
+                contained=CascadeTAOInit(out_size=16, **tao_args),
+                kernel_size=5,
+                stride=2,
+                padding=2,
+            ),
+            CascadeConvInit(
+                contained=CascadeTAOInit(out_size=32, **tao_args),
+                kernel_size=5,
+                stride=2,
+                padding=1,
+            ),
+            CascadeRawInit(CascadeFlatten()),
+            CascadeTAOInit(out_size=10, **tao_args),
+        ]
     ).map(CascadeGradientLossInit)(Batch.with_x(xs))
     sgd_model = CascadeSGD(
         model,
         interval=5,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
     )
+    print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 
     print("training...")
     loss = BoostingSoftmaxLoss()

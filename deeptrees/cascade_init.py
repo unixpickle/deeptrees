@@ -1,7 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,6 +17,8 @@ from .cascade import (
     CascadeSequential,
     CascadeTAO,
     extract_image_patches,
+    flatten_image_patches,
+    undo_image_patches,
 )
 from .cascade_nvp import (
     CascadeNVPCheckpoint,
@@ -466,22 +468,17 @@ class CascadeConvInit(CascadeInit):
             stride=self.stride,
             padding=self.padding,
         )
-        batch = (
-            x.reshape(x.shape[0], x.shape[1], -1)
-            .permute(0, 2, 1)
-            .reshape(-1, x.shape[1])
+        contained, outputs = self.contained(
+            inputs.with_x(flatten_image_patches(x)), targets
         )
-        layers, _ = self.contained(inputs.with_x(batch), targets)
-        if isinstance(layers, list):
-            layers = CascadeSequential(layers)
         result_module = CascadeConv(
-            contained=layers,
+            contained=contained,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
         )
-        with torch.no_grad():
-            inputs = result_module(inputs)
+        inputs = inputs.with_x(undo_image_patches(x, outputs.x))
+
         return result_module, inputs
 
 

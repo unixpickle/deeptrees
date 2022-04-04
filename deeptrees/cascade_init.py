@@ -458,6 +458,8 @@ class CascadeConvInit(CascadeInit):
     kernel_size: int
     stride: int
     padding: int
+    subsampling: Optional[float] = None
+    gradient_loss: bool = False
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
@@ -476,6 +478,8 @@ class CascadeConvInit(CascadeInit):
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
+            subsampling=self.subsampling,
+            gradient_loss=self.gradient_loss,
         )
         inputs = inputs.with_x(undo_image_patches(x.shape, outputs.x))
 

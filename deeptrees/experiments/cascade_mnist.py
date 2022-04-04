@@ -1,13 +1,11 @@
 import itertools
-from typing import Tuple, Union
 
-import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
-from deeptrees.cascade import Batch, CascadeFlatten, CascadeSGD, CascadeTAO
+from deeptrees.cascade import Batch, CascadeFlatten, CascadeFn, CascadeSGD
 from deeptrees.cascade_init import (
     CascadeConvInit,
-    CascadeGradientLossInit,
     CascadeRawInit,
     CascadeSequentialInit,
     CascadeTAOInit,
@@ -44,19 +42,19 @@ def main():
         [
             CascadeConvInit(
                 contained=CascadeTAOInit(out_size=16, **tao_args),
-                kernel_size=5,
-                stride=2,
-                padding=2,
-                subsampling=0.025,
+                kernel_size=3,
+                stride=1,
+                padding=1,
             ),
             CascadeConvInit(
                 contained=CascadeTAOInit(out_size=32, **tao_args),
-                kernel_size=5,
-                stride=2,
+                kernel_size=3,
+                stride=1,
                 padding=1,
-                subsampling=0.1,
             ),
+            CascadeRawInit(CascadeFn(nn.MaxPool2d(2))),
             CascadeRawInit(CascadeFlatten()),
+            CascadeTAOInit(out_size=128, **tao_args),
             CascadeTAOInit(out_size=10, **tao_args),
         ]
     )(Batch.with_x(xs[:init_batch_size]))

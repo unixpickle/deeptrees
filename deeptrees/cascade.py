@@ -373,7 +373,23 @@ class CascadeTAO(CascadeModule):
             branch_builder=self.branch_builder,
             reject_unimprovement=self.reject_unimprovement,
         )
-        self.tree.load_state_dict(h_tao.optimize(self.tree).tree.state_dict())
+        # We want to replace the module self.tree while keeping all of the
+        # exact parameters and buffers (since our optimizer might reference
+        # them).
+        new_tree = h_tao.optimize(self.tree).tree
+        self.tree.load_state_dict(new_tree.state_dict())
+
+        def setattr_recursive(path, value, obj=new_tree):
+            if len(path) == 1:
+                setattr(obj, path[0], value)
+            else:
+                setattr_recursive(path[1:], value, getattr(obj, path[0]))
+
+        for name, value in self.tree.named_parameters():
+            setattr_recursive(name.split("."), value)
+        for name, value in self.tree.named_buffers():
+            setattr_recursive(name.split("."), value)
+        self.tree = new_tree
 
     def leaf_variance(self) -> torch.Tensor:
         """

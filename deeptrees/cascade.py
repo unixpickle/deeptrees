@@ -762,7 +762,7 @@ class CascadeSGD(CascadeModule):
         contained: CascadeModule,
         interval: int,
         opt: optim.Optimizer,
-        eval_mode_update: bool = True,
+        eval_mode_update: bool = False,
     ):
         super().__init__()
         self.contained = contained

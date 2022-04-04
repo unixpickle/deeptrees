@@ -47,12 +47,14 @@ def main():
                 kernel_size=5,
                 stride=2,
                 padding=2,
+                subsampling=0.025,
             ),
             CascadeConvInit(
                 contained=CascadeTAOInit(out_size=32, **tao_args),
                 kernel_size=5,
                 stride=2,
                 padding=1,
+                subsampling=0.1,
             ),
             CascadeRawInit(CascadeFlatten()),
             CascadeTAOInit(out_size=10, **tao_args),
@@ -60,7 +62,7 @@ def main():
     )(Batch.with_x(xs[:init_batch_size]))
     sgd_model = CascadeSGD(
         model,
-        interval=2,
+        interval=5,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")

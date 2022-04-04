@@ -77,6 +77,7 @@ class UpdateContext:
     def __init__(self):
         self._inputs_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
         self._outputs_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
+        self._extra_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
         self._grads_cache: Dict[nn.Module, List[Batch]] = defaultdict(list)
         self._cur_autograd_cache: Dict[nn.Module, Batch] = dict()
         self._loss_cache: List[torch.Tensor] = []
@@ -92,6 +93,12 @@ class UpdateContext:
         Call during module forward() to cache a batch of outputs.
         """
         self._outputs_cache[module].append(outputs.detach())
+
+    def cache_extra(self, module: nn.Module, outputs: Batch):
+        """
+        Call during module forward() to cache a batch of extra information.
+        """
+        self._extra_cache[module].append(outputs.detach())
 
     def require_grad(self, module: nn.Module, outputs: Batch) -> Batch:
         """
@@ -161,6 +168,17 @@ class UpdateContext:
         Get all of the cached outputs for the given module.
         """
         return self._get_batch(self._outputs_cache, module, concatenate, remove)
+
+    def get_extra(
+        self,
+        module: nn.Module,
+        concatenate: bool = True,
+        remove: bool = True,
+    ) -> Union[Batch, List[Batch]]:
+        """
+        Get all of the cached extra information for the given module.
+        """
+        return self._get_batch(self._extra_cache, module, concatenate, remove)
 
     def get_grads(
         self, module: nn.Module, concatenate: bool = True, remove: bool = True
@@ -525,7 +543,7 @@ class CascadeCheckpoint(CascadeModule):
         if ctx is None:
             return self.contained(x)
         ctx.cache_inputs(self, x)
-        ctx.cache_outputs(self, Batch.with_x(torch.get_rng_state()))
+        ctx.cache_extra(self, Batch.with_x(torch.get_rng_state()))
         inner_ctx = UpdateContext()
         out = self.contained(x, ctx=inner_ctx)
         if inner_ctx.has_requested_grads():
@@ -534,7 +552,7 @@ class CascadeCheckpoint(CascadeModule):
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         all_inputs = ctx.get_inputs(self, concatenate=False)
-        all_rng_states = ctx.get_outputs(self, concatenate=False)
+        all_rng_states = ctx.get_extra(self, concatenate=False)
         all_grads = ctx.get_grads(self, concatenate=False)
         requires_grads = len(all_grads) > 0
 

@@ -69,8 +69,14 @@ class TAOBase(ABC):
         right_losses = torch.zeros_like(left_losses)
         left_losses[~decision] = left_result.losses
         right_losses[decision] = right_result.losses
-        left_losses[decision] = self.loss_at_subtree(left_result.tree, right_indices)
-        right_losses[~decision] = self.loss_at_subtree(right_result.tree, left_indices)
+        if len(right_indices):
+            left_losses[decision] = self.loss_at_subtree(
+                left_result.tree, right_indices
+            )
+        if len(left_indices):
+            right_losses[~decision] = self.loss_at_subtree(
+                right_result.tree, left_indices
+            )
 
         return self.build_branch(
             cur_branch=sub_tree.with_children(left_result.tree, right_result.tree),

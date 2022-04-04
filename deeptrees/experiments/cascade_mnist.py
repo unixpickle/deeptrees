@@ -68,20 +68,29 @@ def main():
     print("training...")
     loss = BoostingSoftmaxLoss()
     for epoch in itertools.count():
+        batch_size = 1024
         losses = sgd_model.update(
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
-            batch_size=1024,
+            batch_size=batch_size,
             outer_batch_size=10000,
         )
         with torch.no_grad():
             sgd_model.eval()
-            test_out = sgd_model(Batch.with_x(test_xs)).x
-            test_losses = loss(test_out, test_ys)
-            test_acc = (test_out.argmax(-1) == test_ys).float().mean()
+            total_test_loss = 0.0
+            total_test_correct = 0.0
+            for i in range(0, len(test_xs), batch_size):
+                test_out = sgd_model(Batch.with_x(test_xs[i : i + batch_size])).x
+                test_losses = loss(test_out, test_ys[i : i + batch_size])
+                total_test_correct += (
+                    (test_out.argmax(-1) == test_ys).long().sum().item()
+                )
+                total_test_loss += test_losses.sum().item()
+            test_loss = total_test_loss / len(test_xs)
+            test_acc = total_test_correct / len(test_xs)
             sgd_model.train()
         print(
-            f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_losses.mean().item():.05} test_acc={test_acc.item():.05}"
+            f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )
 
 

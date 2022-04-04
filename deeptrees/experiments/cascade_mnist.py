@@ -83,7 +83,10 @@ def main():
                 test_out = sgd_model(Batch.with_x(test_xs[i : i + batch_size])).x
                 test_losses = loss(test_out, test_ys[i : i + batch_size])
                 total_test_correct += (
-                    (test_out.argmax(-1) == test_ys).long().sum().item()
+                    (test_out.argmax(-1) == test_ys[i : i + batch_size])
+                    .long()
+                    .sum()
+                    .item()
                 )
                 total_test_loss += test_losses.sum().item()
             test_loss = total_test_loss / len(test_xs)

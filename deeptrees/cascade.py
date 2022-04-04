@@ -746,11 +746,13 @@ class CascadeSGD(CascadeModule):
         contained: CascadeModule,
         interval: int,
         opt: optim.Optimizer,
+        eval_mode_update: bool = True,
     ):
         super().__init__()
         self.contained = contained
         self.interval = interval
         self.optimizer = opt
+        self.eval_mode_update = eval_mode_update
         params = list(contained.parameters())
         if len(params):
             device = params[0].device
@@ -773,12 +775,20 @@ class CascadeSGD(CascadeModule):
     ) -> torch.Tensor:
         self.step.add_(1)
         if self.step.item() % self.interval == 0:
-            return super().update(
+            if self.eval_mode_update:
+                was_training = self.contained.training
+                if was_training:
+                    self.contained.eval()
+            losses = super().update(
                 full_batch,
                 loss_fn,
                 batch_size=batch_size,
                 outer_batch_size=outer_batch_size,
             )
+            if self.eval_mode_update:
+                if was_training:
+                    self.contained.train()
+            return losses
         else:
             self.optimizer.zero_grad()
             all_losses = []

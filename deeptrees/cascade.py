@@ -713,7 +713,9 @@ class CascadeConv(CascadeModule):
         @torch.no_grad()
         def sampled_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
             flat_indices = extras["indices"][indices]
-            spatial_indices = flat_indices // patches_per_image
+            spatial_indices = torch.div(
+                flat_indices, patches_per_image, rounding_mode="floor"
+            )
             inner_indices = flat_indices % patches_per_image
 
             selected = patch_array[spatial_indices].clone()

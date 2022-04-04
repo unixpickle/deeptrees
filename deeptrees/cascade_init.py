@@ -477,7 +477,7 @@ class CascadeConvInit(CascadeInit):
             stride=self.stride,
             padding=self.padding,
         )
-        inputs = inputs.with_x(undo_image_patches(x, outputs.x))
+        inputs = inputs.with_x(undo_image_patches(x.shape, outputs.x))
 
         return result_module, inputs
 

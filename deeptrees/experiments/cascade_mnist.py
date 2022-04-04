@@ -57,10 +57,10 @@ def main():
             CascadeRawInit(CascadeFlatten()),
             CascadeTAOInit(out_size=10, **tao_args),
         ]
-    ).map(CascadeGradientLossInit)(Batch.with_x(xs[:init_batch_size]))
+    )(Batch.with_x(xs[:init_batch_size]))
     sgd_model = CascadeSGD(
         model,
-        interval=5,
+        interval=2,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")

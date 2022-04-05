@@ -760,15 +760,17 @@ class CascadeSGD(CascadeModule):
     def __init__(
         self,
         contained: CascadeModule,
-        interval: int,
         opt: optim.Optimizer,
+        interval: Optional[int] = None,
         eval_mode_update: bool = False,
+        interleave: bool = False,
     ):
         super().__init__()
         self.contained = contained
-        self.interval = interval
         self.optimizer = opt
+        self.interval = interval
         self.eval_mode_update = eval_mode_update
+        self.interleave = interleave
         params = list(contained.parameters())
         if len(params):
             device = params[0].device
@@ -790,32 +792,97 @@ class CascadeSGD(CascadeModule):
         outer_batch_size: Optional[int] = None,
     ) -> torch.Tensor:
         self.step.add_(1)
-        if self.step.item() % self.interval == 0:
-            if self.eval_mode_update:
-                was_training = self.contained.training
-                if was_training:
-                    self.contained.eval()
-            losses = super().update(
+
+        if self.interval is None:
+            if self.interleave:
+                return self._update_interleave(
+                    full_batch,
+                    loss_fn,
+                    batch_size=batch_size,
+                    outer_batch_size=outer_batch_size,
+                )
+            else:
+                self._update_sgd(full_batch, loss_fn, batch_size=batch_size)
+                return self._update_regular(
+                    full_batch,
+                    loss_fn,
+                    batch_size=batch_size,
+                    outer_batch_size=outer_batch_size,
+                )
+        elif self.step.item() % self.interval == 0:
+            return self._update_regular(
                 full_batch,
                 loss_fn,
                 batch_size=batch_size,
                 outer_batch_size=outer_batch_size,
             )
-            if self.eval_mode_update:
-                if was_training:
-                    self.contained.train()
-            return losses
         else:
+            return self._update_sgd(full_batch, loss_fn, batch_size=batch_size)
+
+    def _update_regular(
+        self,
+        full_batch: Batch,
+        loss_fn: BatchLossFn,
+        batch_size: Optional[int] = None,
+        outer_batch_size: Optional[int] = None,
+    ) -> torch.Tensor:
+        if self.eval_mode_update:
+            was_training = self.contained.training
+            if was_training:
+                self.contained.eval()
+        losses = super().update(
+            full_batch,
+            loss_fn,
+            batch_size=batch_size,
+            outer_batch_size=outer_batch_size,
+        )
+        if self.eval_mode_update:
+            if was_training:
+                self.contained.train()
+        return losses
+
+    def _update_sgd(
+        self,
+        full_batch: Batch,
+        loss_fn: BatchLossFn,
+        batch_size: Optional[int] = None,
+    ) -> torch.Tensor:
+        self.optimizer.zero_grad()
+        all_losses = []
+        shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
+        for indices, sub_batch in shuffled.batches(batch_size or len(shuffled)):
+            losses = loss_fn(perm[indices], self(sub_batch))
+            all_losses.append(losses.detach())
+            losses.mean().backward()
+            self.optimizer.step()
             self.optimizer.zero_grad()
-            all_losses = []
-            shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
-            for indices, sub_batch in shuffled.batches(batch_size or len(shuffled)):
-                losses = loss_fn(perm[indices], self(sub_batch))
+        return torch.cat(all_losses, dim=0)[perm_inverse]
+
+    def _update_interleave(
+        self,
+        full_batch: Batch,
+        loss_fn: BatchLossFn,
+        batch_size: Optional[int] = None,
+        outer_batch_size: Optional[int] = None,
+    ) -> torch.Tensor:
+        self.optimizer.zero_grad()
+        all_losses = []
+        shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
+        for indices, sub_batch in shuffled.batches(outer_batch_size or batch_size):
+            self._update_regular(
+                sub_batch,
+                loss_fn=lambda x, y: loss_fn(perm[indices[x]], y),
+                batch_size=batch_size,
+            )
+            for inner_indices, sub_sub_batch in sub_batch.batches(
+                batch_size or len(sub_batch)
+            ):
+                losses = loss_fn(perm[indices[inner_indices]], self(sub_sub_batch))
                 all_losses.append(losses.detach())
                 losses.mean().backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-            return torch.cat(all_losses, dim=0)[perm_inverse]
+        return torch.cat(all_losses, dim=0)[perm_inverse]
 
 
 def _flat_sum(x: torch.Tensor) -> torch.Tensor:

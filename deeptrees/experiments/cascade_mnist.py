@@ -27,6 +27,8 @@ def main():
     xs, ys = xs.to(device), ys.to(device)
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
+    train_batch_size = 1024
+
     print("initializing TAO model...")
     init_batch_size = 2048
     tao_args = dict(
@@ -34,6 +36,7 @@ def main():
         branch_builder=TorchObliqueBranchBuilder(
             max_epochs=1,
             optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
+            batch_size=train_batch_size,
         ),
         random_prob=0.1,
         reject_unimprovement=False,
@@ -60,30 +63,28 @@ def main():
     )(Batch.with_x(xs[:init_batch_size]))
     sgd_model = CascadeSGD(
         model,
-        interval=5,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
+        interleave=True,
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 
     print("training...")
     loss = BoostingSoftmaxLoss()
     for epoch in itertools.count():
-        batch_size = 1024
         losses = sgd_model.update(
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
-            batch_size=batch_size,
-            outer_batch_size=10000,
+            batch_size=train_batch_size,
         )
         with torch.no_grad():
             sgd_model.eval()
             total_test_loss = 0.0
             total_test_correct = 0.0
-            for i in range(0, len(test_xs), batch_size):
-                test_out = sgd_model(Batch.with_x(test_xs[i : i + batch_size])).x
-                test_losses = loss(test_out, test_ys[i : i + batch_size])
+            for i in range(0, len(test_xs), train_batch_size):
+                test_out = sgd_model(Batch.with_x(test_xs[i : i + train_batch_size])).x
+                test_losses = loss(test_out, test_ys[i : i + train_batch_size])
                 total_test_correct += (
-                    (test_out.argmax(-1) == test_ys[i : i + batch_size])
+                    (test_out.argmax(-1) == test_ys[i : i + train_batch_size])
                     .long()
                     .sum()
                     .item()

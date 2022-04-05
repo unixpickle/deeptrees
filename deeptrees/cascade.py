@@ -499,7 +499,8 @@ class _CascadeTAO(TAOBase):
         return TAOResult(tree=tree, losses=losses)
 
     def build_leaf(self, cur_leaf: TreeLeaf, sample_indices: torch.Tensor) -> TAOResult:
-        outputs = cur_leaf(self.xs[sample_indices])
+        with torch.no_grad():
+            outputs = cur_leaf(self.xs[sample_indices])
         return TAOResult(
             tree=cur_leaf, losses=self.output_loss(sample_indices, outputs)
         )

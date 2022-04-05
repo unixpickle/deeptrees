@@ -71,13 +71,13 @@ def main():
     print("training...")
     loss = BoostingSoftmaxLoss()
     for epoch in itertools.count():
-        losses = sgd_model.update(
+        sgd_model.update(
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
             batch_size=train_batch_size,
         )
         test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
-        train_loss, train_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
+        train_loss, train_acc = compute_loss_acc(sgd_model, xs, ys, loss)
         print(
             f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )

@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from .fit_base import TreeBranchBuilder
@@ -13,8 +14,8 @@ from .tree import ObliqueTreeBranch, Tree, TreeBranch
 class TorchObliqueBranchBuilder(TreeBranchBuilder):
     """
     Learn oblique splits for a decision tree in a greedy binary classification
-    fashion. The model is trained with the SVM hinge loss, and will by default
-    be pre-initialized with the previous weights of an oblique split.
+    fashion. The model is trained with the SVM hinge loss by default, and will
+    save optimization state in the generate branches to get a warm start.
     """
 
     optimizer: Callable[..., optim.Optimizer] = optim.AdamW
@@ -26,6 +27,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
     batch_size: Optional[int] = 1024
     warm_start: bool = True
     reset_optimizer: bool = False
+    cross_entropy_loss: bool = False
 
     def fit_branch(
         self,
@@ -91,8 +93,13 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 batch_weight = epoch_weight[i : i + batch_size]
                 preds = batch_xs @ weight - bias
 
-                # Hinge loss
-                loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
+                if self.cross_entropy_loss:
+                    loss = F.binary_cross_entropy_with_logits(
+                        preds.view(-1), batch_ys.view(-1).float(), reduction="none"
+                    )
+                else:
+                    # Hinge loss
+                    loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
 
                 loss_sum = (loss * batch_weight).sum()
                 loss_mean = loss_sum / batch_weight.sum()

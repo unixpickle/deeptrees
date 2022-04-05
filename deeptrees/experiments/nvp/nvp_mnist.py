@@ -1,7 +1,6 @@
 import itertools
 import math
 import os
-import pickle
 
 import numpy as np
 import torch
@@ -13,10 +12,9 @@ from deeptrees.cascade_init import (
     CascadeSequentialInit,
 )
 from deeptrees.cascade_nvp import latents_from_batch, nvp_loss, quantization_noise
-from deeptrees.experiments.boosting_mnist import dataset_to_tensors
+from deeptrees.experiments.data import load_mnist
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from PIL import Image
-from torchvision.datasets.mnist import MNIST
 
 OUTPUT_DIR = "./models_nvp_mnist"
 SAVE_INTERVAL = 10
@@ -27,10 +25,8 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print("loading data...")
-    train_dataset = MNIST("./mnist_data", train=True, download=True)
-    test_dataset = MNIST("./mnist_data", train=False, download=True)
-    xs, ys = dataset_to_tensors(train_dataset)
-    test_xs, test_ys = dataset_to_tensors(test_dataset)
+    xs, ys = load_mnist(train=True)
+    test_xs, test_ys = load_mnist(train=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)

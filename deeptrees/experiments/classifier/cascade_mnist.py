@@ -10,18 +10,15 @@ from deeptrees.cascade_init import (
     CascadeSequentialInit,
     CascadeTAOInit,
 )
-from deeptrees.experiments.boosting_mnist import dataset_to_tensors
+from deeptrees.experiments.data import load_mnist
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
-from torchvision.datasets.mnist import MNIST
 
 
 def main():
     print("loading data...")
-    train_dataset = MNIST("./mnist_data", train=True, download=True)
-    test_dataset = MNIST("./mnist_data", train=False, download=True)
-    xs, ys = dataset_to_tensors(train_dataset, spatial=True)
-    test_xs, test_ys = dataset_to_tensors(test_dataset, spatial=True)
+    xs, ys = load_mnist(train=True, spatial=True)
+    test_xs, test_ys = load_mnist(train=False, spatial=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)
@@ -36,7 +33,6 @@ def main():
         branch_builder=TorchObliqueBranchBuilder(
             max_epochs=1,
             optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
-            batch_size=train_batch_size,
         ),
         random_prob=0.1,
         reject_unimprovement=False,

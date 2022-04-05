@@ -1,29 +1,24 @@
-import argparse
 import os
 import pickle
-from typing import Tuple, Union
 
 import numpy as np
 import torch
+from deeptrees.experiments.data import load_mnist
 from deeptrees.fit_base import ConstantLeafBuilder
 from deeptrees.fit_sklearn import SklearnRegressionTreeBuilder
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss, GradientBooster
 from deeptrees.tao import TAOTreeBuilder
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.svm import LinearSVC
 from sklearn.tree import DecisionTreeRegressor
-from torchvision.datasets.mnist import MNIST, FashionMNIST
 
 OUTPUT_DIR = "./models_boosting_mnist"
 
 
 def main():
     print("loading data...")
-    train_dataset = MNIST("./mnist_data", train=True, download=True)
-    test_dataset = MNIST("./mnist_data", train=False, download=True)
-    xs, ys = dataset_to_tensors(train_dataset)
-    test_xs, test_ys = dataset_to_tensors(test_dataset)
+    xs, ys = load_mnist(train=True)
+    test_xs, test_ys = load_mnist(train=False)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -65,22 +60,6 @@ def main():
     print(f" => TAO ensemble accuracy: {acc}")
     with open(os.path.join(OUTPUT_DIR, "tao_ensemble.pkl"), "wb") as f:
         pickle.dump(tao_model, f)
-
-
-def dataset_to_tensors(
-    dataset: Union[MNIST, FashionMNIST], spatial=False
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    images = []
-    labels = []
-    shape = (-1,) if not spatial else (1, 28, 28)
-    for i in range(len(dataset)):
-        img, target = dataset[i]
-        images.append(
-            torch.from_numpy(np.array(img.convert("RGB"))[..., 0]).view(shape).float()
-            / 255
-        )
-        labels.append(target)
-    return torch.stack(images, dim=0), torch.tensor(labels)
 
 
 if __name__ == "__main__":

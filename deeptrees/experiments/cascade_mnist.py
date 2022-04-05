@@ -76,26 +76,29 @@ def main():
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
             batch_size=train_batch_size,
         )
-        with torch.no_grad():
-            sgd_model.eval()
-            total_test_loss = 0.0
-            total_test_correct = 0.0
-            for i in range(0, len(test_xs), train_batch_size):
-                test_out = sgd_model(Batch.with_x(test_xs[i : i + train_batch_size])).x
-                test_losses = loss(test_out, test_ys[i : i + train_batch_size])
-                total_test_correct += (
-                    (test_out.argmax(-1) == test_ys[i : i + train_batch_size])
-                    .long()
-                    .sum()
-                    .item()
-                )
-                total_test_loss += test_losses.sum().item()
-            test_loss = total_test_loss / len(test_xs)
-            test_acc = total_test_correct / len(test_xs)
-            sgd_model.train()
+        test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
+        train_loss, train_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
         print(
-            f"epoch {epoch}: train_loss={losses.mean().item():.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
+            f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )
+
+
+@torch.no_grad()
+def compute_loss_acc(model, xs, ys, loss_fn, batch_size=1024):
+    model.eval()
+    total_test_loss = 0.0
+    total_test_correct = 0.0
+    for i in range(0, len(xs), batch_size):
+        test_out = model(Batch.with_x(xs[i : i + batch_size])).x
+        test_losses = loss_fn(test_out, ys[i : i + batch_size])
+        total_test_correct += (
+            (test_out.argmax(-1) == ys[i : i + batch_size]).long().sum().item()
+        )
+        total_test_loss += test_losses.sum().item()
+    test_loss = total_test_loss / len(xs)
+    test_acc = total_test_correct / len(xs)
+    model.train()
+    return test_loss, test_acc
 
 
 if __name__ == "__main__":

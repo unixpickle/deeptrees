@@ -82,6 +82,7 @@ class CascadeTAOInit(CascadeInit):
     reject_unimprovement: bool = True
     random_prob: float = 0.0
     zero_init_out: bool = False
+    replicate_leaves: bool = False
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
@@ -94,6 +95,8 @@ class CascadeTAOInit(CascadeInit):
             random_prob=self.random_prob,
             zero_init_out=self.zero_init_out,
         )
+        if self.replicate_leaves:
+            _replicate_leaves(tree)
         with torch.no_grad():
             inputs = Batch.with_x(tree(inputs.x))
         return (
@@ -197,6 +200,8 @@ class CascadeLinearGatedTAOInit(CascadeTAOInit):
             random_prob=self.random_prob,
             constant_leaf=True,
         )
+        if self.replicate_leaves:
+            _replicate_leaves(tree)
         in_size = inputs.x.shape[1]
         layer = nn.Linear(in_size, self.out_size).to(inputs.x)
         with torch.no_grad():
@@ -547,3 +552,12 @@ def random_tree(
         threshold=threshold,
         random_prob=random_prob,
     )
+
+
+def _replicate_leaves(t: Tree):
+    first = None
+    for leaf in t.iterate_leaves():
+        if first is None:
+            first = leaf.state_dict()
+        else:
+            leaf.load_state_dict(first)

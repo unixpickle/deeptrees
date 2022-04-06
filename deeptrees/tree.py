@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,10 @@ class Tree(nn.Module, ABC):
     def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
         pass
 
+    @abstractmethod
+    def iterate_leaves(self) -> Iterator["TreeLeaf"]:
+        pass
+
 
 class TreeLeaf(Tree):
     def prune(self, xs: torch.Tensor) -> Tree:
@@ -43,6 +47,9 @@ class TreeLeaf(Tree):
     def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
         return fn(self)
 
+    def iterate_leaves(self) -> Iterator["TreeLeaf"]:
+        yield self
+
 
 class TreeBranch(Tree):
     def __init__(self, left: Tree, right: Tree):
@@ -54,6 +61,13 @@ class TreeBranch(Tree):
     def with_children(self, left: Tree, right: Tree) -> "TreeBranch":
         """
         Create a shallow copy of self with different children.
+        """
+
+    @abstractmethod
+    def decision(self, xs: torch.Tensor) -> torch.Tensor:
+        """
+        Return a boolean tensor of shape [N] for an input batch [N x ...].
+        The True values go to the right branch, and False to the left.
         """
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
@@ -82,9 +96,9 @@ class TreeBranch(Tree):
     def map_leaves(self, fn: Callable[["TreeLeaf"], "TreeLeaf"]) -> "Tree":
         return self.with_children(self.left.map_leaves(fn), self.right.map_leaves(fn))
 
-    @abstractmethod
-    def decision(self, xs: torch.Tensor) -> torch.Tensor:
-        pass
+    def iterate_leaves(self) -> Iterator["TreeLeaf"]:
+        yield from self.left.iterate_leaves()
+        yield from self.right.iterate_leaves()
 
 
 class ObliqueTreeBranch(TreeBranch):

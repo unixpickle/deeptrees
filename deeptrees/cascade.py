@@ -2,7 +2,7 @@ import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -26,12 +26,28 @@ class Batch(dict):
         return cls(dict(x=x))
 
     @classmethod
-    def cat(cls, elements: Sequence["Batch"], dim: int = 0) -> "Batch":
+    def cat(cls, elements: Iterable["Batch"], dim: int = 0) -> "Batch":
+        return cls(
+            {k: torch.cat(v, dim=dim) for k, v in Batch._combined(elements).items()}
+        )
+
+    @classmethod
+    def stack(cls, elements: Iterable["Batch"], dim: int = 0) -> "Batch":
+        return cls(
+            {k: torch.stack(v, dim=dim) for k, v in Batch._combined(elements).items()}
+        )
+
+    @classmethod
+    def sum(cls, elements: Iterable["Batch"]) -> "Batch":
+        return cls({k: sum(v) for k, v in Batch._combined(elements).items()})
+
+    @staticmethod
+    def _combined(elements: Iterable["Batch"]) -> Dict[Any, List[torch.Tensor]]:
         joined = defaultdict(list)
         for element in elements:
             for k, v in element.items():
                 joined[k].append(v)
-        return cls({k: torch.cat(v, dim=dim) for k, v in joined.items()})
+        return joined
 
     @property
     def x(self) -> torch.Tensor:
@@ -70,6 +86,18 @@ class Batch(dict):
             yield indices[i : i + batch_size], Batch(
                 {k: v[i : i + batch_size] for k, v in self.items()}
             )
+
+    def unbind(self, dim: int) -> List["Batch"]:
+        prototype_value = next(iter(self.values()))
+        batches = [Batch() for _ in range(prototype_value.shape[dim])]
+        for k, v in self.items():
+            unbound = v.unbind(dim)
+            assert len(unbound) == len(
+                batches
+            ), f"shapes of all values must agree in dimension {dim} but got {len(batches)} versus {len(unbound)}"
+            for i, sub_v in enumerate(unbound):
+                batches[i][k] = sub_v
+        return batches
 
     def __len__(self) -> int:
         return len(next(iter(self.values())))
@@ -287,7 +315,7 @@ class CascadeSequential(CascadeModule):
     Sequentially compose multiple cascade modules.
     """
 
-    def __init__(self, sequence: Sequence[CascadeModule]):
+    def __init__(self, sequence: Iterable[CascadeModule]):
         super().__init__()
         self.sequence = nn.ModuleList(sequence)
 
@@ -308,6 +336,50 @@ class CascadeSequential(CascadeModule):
                     return loss_fn(indices, final_outputs)
 
             self.sequence[i].update_local(ctx, child_loss_fn)
+
+
+class CascadeParallelSum(CascadeModule):
+    """
+    Run sub-modules in parallel and them sum their outputs.
+
+    All sub-modules must return the same keys and shapes for those keys.
+    """
+
+    def __init__(self, modules: Iterable[CascadeModule]):
+        super().__init__()
+        self.contained = nn.ModuleList(modules)
+
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        outs = []
+        for layer in self.contained:
+            outs.append(layer(inputs, ctx=ctx))
+        if ctx is not None and len(self.contained) > 1:
+            combined = Batch.stack(outs, dim=1)
+            ctx.cache_extra(self, combined)
+        return Batch.sum(outs)
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        if len(self.contained) == 1:
+            self.contained[0].update_local(ctx, loss_fn)
+            return
+
+        separate_outs = ctx.get_extra().unbind(1)
+        for i, layer in enumerate(self.contained):
+            other_sum = None
+
+            def local_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+                nonlocal other_sum
+                if other_sum is None:
+                    # Lazily computed because the module might not actually
+                    # perform an update.
+                    other_sum = Batch.sum(
+                        x for j, x in enumerate(separate_outs) if j != i
+                    )
+                return loss_fn(
+                    indices, Batch.sum([outputs, other_sum.at_indices(indices)])
+                )
+
+            layer.update_local(ctx, local_loss_fn)
 
 
 class CascadeFlatten(CascadeModule):

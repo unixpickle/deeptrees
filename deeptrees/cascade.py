@@ -348,6 +348,7 @@ class CascadeParallelSum(CascadeModule):
     def __init__(self, modules: Iterable[CascadeModule]):
         super().__init__()
         self.contained = nn.ModuleList(modules)
+        assert len(self.contained) >= 1
 
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         outs = []
@@ -363,7 +364,7 @@ class CascadeParallelSum(CascadeModule):
             self.contained[0].update_local(ctx, loss_fn)
             return
 
-        separate_outs = ctx.get_extra().unbind(1)
+        separate_outs = ctx.get_extra(self).unbind(1)
         for i, layer in enumerate(self.contained):
             other_sum = None
 

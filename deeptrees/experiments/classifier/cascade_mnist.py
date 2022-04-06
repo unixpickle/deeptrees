@@ -6,6 +6,7 @@ import torch.optim as optim
 from deeptrees.cascade import Batch, CascadeFlatten, CascadeFn, CascadeSGD
 from deeptrees.cascade_init import (
     CascadeConvInit,
+    CascadeParallelSumInit,
     CascadeRawInit,
     CascadeSequentialInit,
     CascadeTAOInit,
@@ -39,17 +40,31 @@ def main():
     )
     model, _ = CascadeSequentialInit(
         [
-            CascadeConvInit(
-                contained=CascadeTAOInit(out_size=16, **tao_args),
-                kernel_size=3,
-                stride=1,
-                padding=1,
+            CascadeParallelSumInit(
+                [
+                    CascadeRawInit(CascadeFn(nn.Conv2d(1, 16, 3, padding=1))),
+                    CascadeConvInit(
+                        contained=CascadeTAOInit(
+                            out_size=16, zero_init_out=True, **tao_args
+                        ),
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    ),
+                ]
             ),
-            CascadeConvInit(
-                contained=CascadeTAOInit(out_size=32, **tao_args),
-                kernel_size=3,
-                stride=1,
-                padding=1,
+            CascadeParallelSumInit(
+                [
+                    CascadeRawInit(CascadeFn(nn.Conv2d(16, 16, 3, padding=1))),
+                    CascadeConvInit(
+                        contained=CascadeTAOInit(
+                            out_size=16, zero_init_out=True, **tao_args
+                        ),
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    ),
+                ]
             ),
             CascadeRawInit(CascadeFn(nn.MaxPool2d(2))),
             CascadeRawInit(CascadeFlatten()),

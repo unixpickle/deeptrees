@@ -14,6 +14,7 @@ from .cascade import (
     CascadeGradientLoss,
     CascadeLinearGatedTAO,
     CascadeModule,
+    CascadeParallelSum,
     CascadeSequential,
     CascadeTAO,
     extract_image_patches,
@@ -450,6 +451,22 @@ class CascadeSequentialInit(CascadeInit):
         return (CascadeSequential if not self.nvp else CascadeNVPSequential)(
             result
         ), inputs
+
+
+@dataclass
+class CascadeParallelSumInit(CascadeInit):
+    initializers: Sequence[CascadeInit]
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[CascadeModule, Batch]:
+        result = []
+        outputs = []
+        for x in self.initializers:
+            module, output = x(inputs, targets)
+            outputs.append(output)
+            result.append(module)
+        return CascadeParallelSum(result), Batch.sum(outputs)
 
 
 @dataclass

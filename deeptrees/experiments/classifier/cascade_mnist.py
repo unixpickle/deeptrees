@@ -42,7 +42,9 @@ def main():
         [
             CascadeParallelSumInit(
                 [
-                    CascadeRawInit(CascadeFn(nn.Conv2d(1, 16, 3, padding=1))),
+                    CascadeRawInit(
+                        CascadeFn(nn.Conv2d(1, 16, 3, padding=1).to(device))
+                    ),
                     CascadeConvInit(
                         contained=CascadeTAOInit(
                             out_size=16, zero_init_out=True, **tao_args
@@ -55,7 +57,9 @@ def main():
             ),
             CascadeParallelSumInit(
                 [
-                    CascadeRawInit(CascadeFn(nn.Conv2d(16, 16, 3, padding=1))),
+                    CascadeRawInit(
+                        CascadeFn(nn.Conv2d(16, 16, 3, padding=1).to(device))
+                    ),
                     CascadeConvInit(
                         contained=CascadeTAOInit(
                             out_size=16, zero_init_out=True, **tao_args

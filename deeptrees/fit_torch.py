@@ -24,6 +24,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
     )
     converge_epochs: int = 10
     max_epochs: int = 1000
+    max_iters: Optional[int] = None
     batch_size: Optional[int] = 1024
     warm_start: bool = True
     reset_optimizer: bool = False
@@ -76,6 +77,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             batch_size = min(self.batch_size, len(xs))
 
         history = []
+        iters = 0
         for _ in range(self.max_epochs):
             if batch_size < len(xs):
                 indices = torch.randperm(len(xs))
@@ -107,8 +109,13 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 loss_mean.backward()
                 opt.step()
                 total_loss += loss_sum.item()
+                iters += 1
+                if self.max_iters and iters >= self.max_iters:
+                    break
             history.append(total_loss)
-            if self.should_terminate(history):
+            if self.should_terminate(history) or (
+                self.max_iters and iters >= self.max_iters
+            ):
                 break
 
         kwargs = dict(

@@ -1,11 +1,31 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Tuple
 
 import torch
 import torch.nn as nn
 
 
 class Tree(nn.Module, ABC):
+    def batched_forward(self, xs: torch.Tensor) -> torch.Tensor:
+        """
+        Run the tree on the inputs with potentially fewer indexing operations
+        and copies as forward().
+        """
+        out = None
+        for leaf, decisions in self._leaves_and_decisions(
+            xs, torch.ones(len(xs), device=xs.device, dtype=torch.bool)
+        ):
+            sub_out = leaf(xs[decisions])
+            if out is None:
+                out = torch.empty(
+                    len(xs),
+                    sub_out.shape[1],
+                    device=sub_out.device,
+                    dtype=sub_out.dtype,
+                )
+            out[decisions] = sub_out
+        return out
+
     @abstractmethod
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         """
@@ -34,6 +54,12 @@ class Tree(nn.Module, ABC):
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         pass
 
+    @abstractmethod
+    def _leaves_and_decisions(
+        self, xs: torch.Tensor, parent_decisions: torch.Tensor
+    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor]]:
+        pass
+
 
 class TreeLeaf(Tree):
     def prune(self, xs: torch.Tensor) -> Tree:
@@ -49,6 +75,12 @@ class TreeLeaf(Tree):
 
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         yield self
+
+    def _leaves_and_decisions(
+        self, xs: torch.Tensor, parent_decisions: torch.Tensor
+    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor]]:
+        _ = xs
+        yield self, parent_decisions
 
 
 class TreeBranch(Tree):
@@ -99,6 +131,14 @@ class TreeBranch(Tree):
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         yield from self.left.iterate_leaves()
         yield from self.right.iterate_leaves()
+
+    def _leaves_and_decisions(
+        self, xs: torch.Tensor, parent_decisions: torch.Tensor
+    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor]]:
+        decisions = parent_decisions
+        self_dec = self.decision(xs)
+        yield from self.left._leaves_and_decisions(xs, decisions & (~self_dec))
+        yield from self.right._leaves_and_decisions(xs, decisions & self_dec)
 
 
 class ObliqueTreeBranch(TreeBranch):

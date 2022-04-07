@@ -80,6 +80,15 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
         else:
             batch_size = min(self.batch_size, len(xs))
 
+        def accuracy():
+            accuracies = (xs.T @ weight - bias == classes).float()
+            return (
+                accuracies.mean().item(),
+                ((accuracies * sample_weight).sum() / sample_weight.sum()).item(),
+            )
+
+        print("pre acc", accuracy())
+
         history = []
         iters = 0
         for _ in range(self.max_epochs):
@@ -121,6 +130,8 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 self.max_iters and iters >= self.max_iters
             ):
                 break
+
+        print("post acc", accuracy())
 
         kwargs = dict(
             left=cur_branch.left,

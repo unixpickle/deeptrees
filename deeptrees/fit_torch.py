@@ -121,7 +121,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                     loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
 
                 loss_sum = (loss * batch_weight).sum()
-                loss_mean = loss_sum / batch_weight.sum()
+                loss_mean = loss_sum.mean()
                 opt.zero_grad()
                 loss_mean.backward()
                 opt.step()

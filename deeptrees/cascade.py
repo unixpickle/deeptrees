@@ -976,16 +976,6 @@ def _shuffle_with_inverse(batch: Batch) -> Tuple[Batch, torch.Tensor, torch.Tens
 def extract_image_patches(
     x: torch.Tensor, kernel_size: int, stride: int, padding: int
 ) -> torch.Tensor:
-    if len(x.shape) == 4:
-        out = nn.Unfold(kernel_size=kernel_size, stride=stride, padding=padding)(x)
-        return out.reshape(
-            [
-                out.shape[0],
-                out.shape[1],
-                math.floor((x.shape[2] + 2 * padding - kernel_size) / stride + 1),
-                math.floor((x.shape[3] + 2 * padding - kernel_size) / stride + 1),
-            ]
-        )
     pad_tuple = (padding,) * 2 * (len(x.shape) - 2)
     x = F.pad(x, pad_tuple)
     for i in range(2, len(x.shape)):

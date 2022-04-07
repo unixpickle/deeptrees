@@ -15,7 +15,7 @@ def conv_pool_tree_residual() -> CascadeInit:
     tao_args = dict(
         tree_depth=2,
         branch_builder=TorchObliqueBranchBuilder(
-            max_epochs=1,
+            max_epochs=5,
             optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
         ),
         random_prob=0.1,

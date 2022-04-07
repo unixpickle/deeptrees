@@ -6,24 +6,6 @@ import torch.nn as nn
 
 
 class Tree(nn.Module, ABC):
-    def batched_forward(self, xs: torch.Tensor) -> torch.Tensor:
-        """
-        Run the tree on the inputs with potentially fewer indexing operations
-        and copies as forward().
-        """
-        outs = []
-        out_indices = []
-        for leaf, indices, sub_xs in self._leaves_and_indices(
-            torch.arange(len(xs), device=xs.device), xs
-        ):
-            outs.append(leaf(sub_xs))
-            out_indices.append(indices)
-        out_joined = torch.cat(outs)
-        out_inds = torch.cat(out_indices)
-        inv_perm = torch.empty_like(out_inds)
-        inv_perm[out_inds] = torch.arange(len(out_inds), device=out_inds.device)
-        return out_joined[inv_perm]
-
     @abstractmethod
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         """
@@ -31,6 +13,23 @@ class Tree(nn.Module, ABC):
 
         :param xs: an [N x n_features] tensor.
         :return: an [N x n_outputs] tensor.
+        """
+        pass
+
+    @abstractmethod
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Apply the model to the inputs and yield chunks of outputs.
+
+        This must yield at least one chunk, and all indices must be used
+        exactly once.
+
+        :param indices: a tensor of shape [N] with indices for each sample.
+        :param xs: an [N x n_features] tensor.
+        :return: an iterator over (sub_indices, sub_outputs). The sub_indices
+                 should be non-overlapping subsets of indices.
         """
 
     @abstractmethod
@@ -52,14 +51,13 @@ class Tree(nn.Module, ABC):
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         pass
 
-    @abstractmethod
-    def _leaves_and_indices(
-        self, indices: torch.Tensor, xs: torch.Tensor
-    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor, torch.Tensor]]:
-        pass
-
 
 class TreeLeaf(Tree):
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        yield indices, self(xs)
+
     def prune(self, xs: torch.Tensor) -> Tree:
         _ = xs
         return self
@@ -73,11 +71,6 @@ class TreeLeaf(Tree):
 
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         yield self
-
-    def _leaves_and_indices(
-        self, indices: torch.Tensor, xs: torch.Tensor
-    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor]]:
-        yield self, indices, xs
 
 
 class TreeBranch(Tree):
@@ -100,14 +93,23 @@ class TreeBranch(Tree):
         """
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        decisions = self.decision(xs)
-        sub_left = self.left(xs[~decisions])
-        sub_right = self.right(xs[decisions])
+        result = None
+        for indices, outs in self.forward_chunks(
+            torch.arange(len(xs), device=xs.device), xs
+        ):
+            if result is None:
+                result = torch.empty(
+                    (len(xs), *outs.shape[1:]), device=outs.device, dtype=outs.dtype
+                )
+            result[indices] = outs
+        return result
 
-        out = torch.zeros(len(xs), sub_left.shape[1]).to(sub_left)
-        out[~decisions] = sub_left
-        out[decisions] = sub_right
-        return out
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        decisions = self.decision(xs)
+        yield from self.left.forward_chunks(indices[~decisions], xs[~decisions])
+        yield from self.right.forward_chunks(indices[decisions], xs[decisions])
 
     def prune(self, xs: torch.Tensor) -> Tree:
         decisions = self.decision(xs)
@@ -128,13 +130,6 @@ class TreeBranch(Tree):
     def iterate_leaves(self) -> Iterator["TreeLeaf"]:
         yield from self.left.iterate_leaves()
         yield from self.right.iterate_leaves()
-
-    def _leaves_and_indices(
-        self, indices: torch.Tensor, xs: torch.Tensor
-    ) -> Iterator[Tuple["TreeLeaf", torch.Tensor]]:
-        decisions = self.decision(xs)
-        yield from self.left._leaves_and_indices(indices[~decisions], xs[~decisions])
-        yield from self.right._leaves_and_indices(indices[decisions], xs[decisions])
 
 
 class ObliqueTreeBranch(TreeBranch):

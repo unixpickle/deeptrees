@@ -437,7 +437,7 @@ class CascadeTAO(CascadeModule):
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         if ctx is not None:
             ctx.cache_inputs(self, inputs)
-        return Batch.with_x(self.tree.batched_forward(inputs.x))
+        return Batch.with_x(self.tree(inputs.x))
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         h_tao = _CascadeTAO(

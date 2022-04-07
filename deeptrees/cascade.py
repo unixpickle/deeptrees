@@ -976,21 +976,28 @@ def _shuffle_with_inverse(batch: Batch) -> Tuple[Batch, torch.Tensor, torch.Tens
 def extract_image_patches(
     x: torch.Tensor, kernel_size: int, stride: int, padding: int
 ) -> torch.Tensor:
-    pad_tuple = (padding,) * 2 * (len(x.shape) - 2)
+    spatial_dims = len(x.shape) - 2
+    pad_tuple = (padding,) * 2 * spatial_dims
     x = F.pad(x, pad_tuple)
+    orig_shape = x.shape
+
+    patch_size = 1
     for i in range(2, len(x.shape)):
         x = x.unfold(i, kernel_size, stride)
-        # Another dimension, kernel_size, is appended to the shape.
-        # Here, we fold it into the channel dimension.
-        perm = list(range(len(x.shape)))
-        del perm[-1]
-        perm.insert(2, len(perm))
-        x = x.permute(perm)
-        new_shape = list(x.shape)
-        new_shape[1] *= new_shape[2]
-        del new_shape[2]
-        x = x.reshape(new_shape)
-    return x
+        patch_size *= x.shape[-1]
+    x = x.view(*orig_shape, patch_size)
+
+    # Move patch size after channel dimension.
+    perm = list(range(len(x.shape)))
+    del perm[-1]
+    perm.insert(2, len(perm))
+    x = x.permute(perm)
+
+    # Collapse channel and patch dimensions
+    new_shape = list(x.shape)
+    new_shape[1] *= new_shape[2]
+    del new_shape[2]
+    return x.reshape(new_shape)
 
 
 def flatten_image_patches(x: torch.Tensor) -> torch.Tensor:

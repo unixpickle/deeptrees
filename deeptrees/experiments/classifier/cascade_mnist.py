@@ -4,7 +4,9 @@ import torch
 import torch.optim as optim
 from deeptrees.analysis import track_tree_usage
 from deeptrees.cascade import Batch, CascadeSGD
-from deeptrees.experiments.classifier.models import conv_pool_tree as model_initializer
+from deeptrees.experiments.classifier.models import (
+    conv_pool_tree_residual as model_initializer,
+)
 from deeptrees.experiments.data import load_mnist
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
 

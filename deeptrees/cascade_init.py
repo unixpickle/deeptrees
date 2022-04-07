@@ -1,7 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -58,15 +58,19 @@ class CascadeInit(ABC):
 
 @dataclass
 class CascadeRawInit(CascadeInit):
-    module: CascadeModule
+    module: Union[CascadeModule, Callable[[Batch], CascadeModule]]
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[CascadeModule, Batch]:
+        if isinstance(self.module, CascadeModule):
+            module = self.module
+        else:
+            module = self.module(inputs)
         with torch.no_grad():
-            inputs = self.module(inputs)
+            inputs = module(inputs)
         _ = targets
-        return self.module, inputs
+        return module, inputs
 
 
 @dataclass

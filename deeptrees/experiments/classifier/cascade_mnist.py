@@ -1,17 +1,10 @@
 import itertools
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from deeptrees.cascade import Batch, CascadeFlatten, CascadeFn, CascadeSGD
-from deeptrees.cascade_init import (
-    CascadeConvInit,
-    CascadeRawInit,
-    CascadeSequentialInit,
-    CascadeTAOInit,
-)
+from deeptrees.cascade import Batch, CascadeSGD
+from deeptrees.experiments.classifier.models import conv_pool_tree as model_initializer
 from deeptrees.experiments.data import load_mnist
-from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
 
 
@@ -28,36 +21,7 @@ def main():
 
     print("initializing TAO model...")
     init_batch_size = 2048
-    tao_args = dict(
-        tree_depth=2,
-        branch_builder=TorchObliqueBranchBuilder(
-            max_epochs=1,
-            optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
-        ),
-        random_prob=0.1,
-        reject_unimprovement=False,
-        replicate_leaves=True,
-    )
-    model, _ = CascadeSequentialInit(
-        [
-            CascadeConvInit(
-                contained=CascadeTAOInit(out_size=16, **tao_args),
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            CascadeConvInit(
-                contained=CascadeTAOInit(out_size=32, **tao_args),
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            CascadeRawInit(CascadeFn(nn.MaxPool2d(2))),
-            CascadeRawInit(CascadeFlatten()),
-            CascadeTAOInit(out_size=128, **tao_args),
-            CascadeTAOInit(out_size=10, **tao_args),
-        ]
-    )(Batch.with_x(xs[:init_batch_size]))
+    model, _ = model_initializer()(Batch.with_x(xs[:init_batch_size]))
     sgd_model = CascadeSGD(
         model,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),

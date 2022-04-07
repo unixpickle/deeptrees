@@ -732,9 +732,9 @@ class CascadeConv(CascadeModule):
                     subsample_count = math.ceil(self.subsampling * len(out))
                 else:
                     subsample_count = len(inputs.x)
-                subsample_indices = torch.randperm(len(out))[:subsample_count].to(
-                    x.device
-                )
+                subsample_indices = torch.randperm(len(out), device=x.device)[
+                    :subsample_count
+                ]
                 sub_inputs = flat_in.at_indices(subsample_indices)
 
                 ctx.cache_inputs(self, sub_inputs)

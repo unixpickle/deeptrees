@@ -81,7 +81,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             batch_size = min(self.batch_size, len(xs))
 
         def accuracy():
-            accuracies = (xs @ weight - bias == classes).float()
+            accuracies = ((xs @ weight - bias > 0) == classes).float()
             return (
                 accuracies.mean().item(),
                 ((accuracies * sample_weight).sum() / sample_weight.sum()).item(),

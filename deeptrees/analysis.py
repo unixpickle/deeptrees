@@ -51,9 +51,9 @@ def track_tree_usage(module: nn.Module) -> Iterator[Dict[str, TreeLeafUsage]]:
 def randomize_tree_decisions(module: nn.Module) -> Iterator:
     handles = []
     for _, tree in named_trees(module):
-        leaves = list(tree.iterate_leaves())
 
-        def forward_hook(self, input, output):
+        def forward_hook(self, inputs, output):
+            leaves = list(self.iterate_leaves())
             _ = output
             leaf_indices = torch.randint(
                 low=0, high=len(leaves), size=(len(output),), device=output.device
@@ -61,7 +61,7 @@ def randomize_tree_decisions(module: nn.Module) -> Iterator:
             out = torch.empty_like(output)
             for i, leaf in enumerate(leaves):
                 decision = leaf_indices == i
-                out[decision] = leaf(input[decision])
+                out[decision] = leaf(inputs[0][decision])
             return out
 
         handles.append(tree.register_forward_hook(forward_hook))

@@ -2,6 +2,7 @@ import itertools
 
 import torch
 import torch.optim as optim
+from deeptrees.analysis import track_tree_usage
 from deeptrees.cascade import Batch, CascadeSGD
 from deeptrees.experiments.classifier.models import conv_pool_tree as model_initializer
 from deeptrees.experiments.data import load_mnist
@@ -38,10 +39,15 @@ def main():
             batch_size=train_batch_size,
         )
         test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
-        train_loss, train_acc = compute_loss_acc(sgd_model, xs, ys, loss)
+        with track_tree_usage(sgd_model) as tree_usage:
+            train_loss, train_acc = compute_loss_acc(sgd_model, xs, ys, loss)
         print(
             f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )
+        for tree, usage in tree_usage.items():
+            print(
+                f"  - tree {tree}: used={usage.num_used()} entropy={usage.entropy():.05}"
+            )
 
 
 @torch.no_grad()

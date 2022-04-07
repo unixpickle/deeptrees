@@ -20,7 +20,7 @@ class TreeLeafUsage:
         result = 0.0
         for x in self.counts.values():
             p = x / total_usage
-            result -= p * math.log2(max(1.0, p))
+            result -= p * math.log2(max(1e-9, p))
         return result
 
 

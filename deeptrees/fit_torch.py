@@ -81,10 +81,14 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             batch_size = min(self.batch_size, len(xs))
 
         def accuracy():
-            accuracies = ((xs @ weight - bias > 0) == classes).float()
+            preds = xs @ weight - bias
+            loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
+            accuracies = ((preds > 0) == classes).float()
             return (
                 accuracies.mean().item(),
                 ((accuracies * sample_weight).sum() / sample_weight.sum()).item(),
+                loss.mean().item(),
+                ((loss * sample_weight).sum() / sample_weight.sum()).item(),
             )
 
         print("pre acc", accuracy())

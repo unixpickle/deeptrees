@@ -135,7 +135,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             ):
                 break
 
-        print("post acc", accuracy())
+        print("post acc", accuracy(), history)
 
         kwargs = dict(
             left=cur_branch.left,

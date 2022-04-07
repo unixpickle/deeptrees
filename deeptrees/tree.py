@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,6 +13,23 @@ class Tree(nn.Module, ABC):
 
         :param xs: an [N x n_features] tensor.
         :return: an [N x n_outputs] tensor.
+        """
+        pass
+
+    @abstractmethod
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Apply the model to the inputs and yield chunks of outputs.
+
+        This must yield at least one chunk, and all indices must be used
+        exactly once.
+
+        :param indices: a tensor of shape [N] with indices for each sample.
+        :param xs: an [N x n_features] tensor.
+        :return: an iterator over (sub_indices, sub_outputs). The sub_indices
+                 should be non-overlapping subsets of indices.
         """
 
     @abstractmethod
@@ -36,6 +53,11 @@ class Tree(nn.Module, ABC):
 
 
 class TreeLeaf(Tree):
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        yield indices, self(xs)
+
     def prune(self, xs: torch.Tensor) -> Tree:
         _ = xs
         return self
@@ -71,14 +93,23 @@ class TreeBranch(Tree):
         """
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        decisions = self.decision(xs)
-        sub_left = self.left(xs[~decisions])
-        sub_right = self.right(xs[decisions])
+        result = None
+        for indices, outs in self.forward_chunks(
+            torch.arange(len(xs), device=xs.device), xs
+        ):
+            if result is None:
+                result = torch.empty(
+                    (len(xs), *outs.shape[1:]), device=outs.device, dtype=outs.dtype
+                )
+            result[indices] = outs
+        return result
 
-        out = torch.zeros(len(xs), sub_left.shape[1]).to(sub_left)
-        out[~decisions] = sub_left
-        out[decisions] = sub_right
-        return out
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        decisions = self.decision(xs)
+        yield from self.left.forward_chunks(indices[~decisions], xs[~decisions])
+        yield from self.right.forward_chunks(indices[decisions], xs[decisions])
 
     def prune(self, xs: torch.Tensor) -> Tree:
         decisions = self.decision(xs)

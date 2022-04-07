@@ -1003,14 +1003,6 @@ def extract_image_patches(
     return x
 
 
-t = torch.randn(5, 3, 32, 32)
-x = nn.Unfold(kernel_size=5, padding=1, stride=2)(t)
-y = extract_image_patches(t, kernel_size=5, padding=1, stride=2)
-x = x.reshape(y.shape)
-print(x.shape, y.shape)
-print((x - y).abs().max().item())
-
-
 def flatten_image_patches(x: torch.Tensor) -> torch.Tensor:
     spatial_prod = int(np.prod(x.shape[2:]))
     full_batch = x.shape[0] * spatial_prod

@@ -977,8 +977,15 @@ def extract_image_patches(
     x: torch.Tensor, kernel_size: int, stride: int, padding: int
 ) -> torch.Tensor:
     if len(x.shape) == 4:
-        return nn.Unfold(kernel_size=kernel_size, padding=padding, stride=stride)(x)
-
+        out = nn.Unfold(kernel_size=kernel_size, stride=stride, padding=padding)(x)
+        return out.reshape(
+            [
+                out.shape[0],
+                out.shape[1],
+                math.floor((x.shape[2] + 2 * padding - kernel_size) / stride + 1),
+                math.floor((x.shape[3] + 2 * padding - kernel_size) / stride + 1),
+            ]
+        )
     pad_tuple = (padding,) * 2 * (len(x.shape) - 2)
     x = F.pad(x, pad_tuple)
     for i in range(2, len(x.shape)):
@@ -994,6 +1001,14 @@ def extract_image_patches(
         del new_shape[2]
         x = x.reshape(new_shape)
     return x
+
+
+t = torch.randn(5, 3, 32, 32)
+x = nn.Unfold(kernel_size=5, padding=1, stride=2)(t)
+y = extract_image_patches(t, kernel_size=5, padding=1, stride=2)
+x = x.reshape(y.shape)
+print(x.shape, y.shape)
+print((x - y).abs().max().item())
 
 
 def flatten_image_patches(x: torch.Tensor) -> torch.Tensor:

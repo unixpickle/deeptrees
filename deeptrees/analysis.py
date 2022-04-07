@@ -34,7 +34,7 @@ def track_tree_usage(module: nn.Module) -> Iterator[Dict[str, TreeLeafUsage]]:
 
         def forward_hook(self, input, output, out_dict=results[tree_name].counts):
             _ = output
-            out_dict[self] += len(input)
+            out_dict[self] += len(input[0])
 
         for leaf in tree.iterate_leaves():
             results[tree_name].counts[leaf] = 0

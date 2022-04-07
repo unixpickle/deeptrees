@@ -14,7 +14,7 @@ class Tree(nn.Module, ABC):
         outs = []
         out_indices = []
         for leaf, indices, sub_xs in self._leaves_and_indices(
-            xs, torch.arange(len(xs), device=xs.device, dtype=torch.bool)
+            xs, torch.arange(len(xs), device=xs.device)
         ):
             outs.append(leaf(sub_xs))
             out_indices.append(indices)

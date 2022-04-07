@@ -979,25 +979,19 @@ def extract_image_patches(
     spatial_dims = len(x.shape) - 2
     pad_tuple = (padding,) * 2 * spatial_dims
     x = F.pad(x, pad_tuple)
-    orig_shape = x.shape
 
     patch_size = 1
     for i in range(2, len(x.shape)):
         x = x.unfold(i, kernel_size, stride)
         patch_size *= x.shape[-1]
-    x = x.view(*orig_shape, patch_size)
 
-    # Move patch size after channel dimension.
+    # Move patch dimensions after channel dimension.
     perm = list(range(len(x.shape)))
-    del perm[-1]
-    perm.insert(2, len(perm))
+    perm = [*perm[:2], *perm[2 + spatial_dims :], *perm[2 : 2 + spatial_dims]]
     x = x.permute(perm)
 
     # Collapse channel and patch dimensions
-    new_shape = list(x.shape)
-    new_shape[1] *= new_shape[2]
-    del new_shape[2]
-    return x.reshape(new_shape)
+    return x.reshape(x.shape[0], x.shape[1] * patch_size, *x.shape[-spatial_dims:])
 
 
 def flatten_image_patches(x: torch.Tensor) -> torch.Tensor:

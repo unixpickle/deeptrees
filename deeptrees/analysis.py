@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, Iterator, Tuple
 
+import torch
 import torch.nn as nn
 
 from .tree import Tree, TreeLeaf
@@ -41,6 +42,31 @@ def track_tree_usage(module: nn.Module) -> Iterator[Dict[str, TreeLeafUsage]]:
             handles.append(leaf.register_forward_hook(forward_hook))
 
     yield results
+
+    for hook in handles:
+        hook.remove()
+
+
+@contextmanager
+def randomize_tree_decisions(module: nn.Module) -> Iterator:
+    handles = []
+    for _, tree in named_trees(module):
+        leaves = list(tree.iterate_leaves())
+
+        def forward_hook(self, input, output):
+            _ = output
+            leaf_indices = torch.randint(
+                low=0, high=len(leaves), size=(len(output),), device=output.device
+            )
+            out = torch.empty_like(output)
+            for i, leaf in enumerate(leaves):
+                decision = leaf_indices == i
+                out[decision] = leaf(input[decision])
+            return out
+
+        handles.append(tree.register_forward_hook(forward_hook))
+
+    yield
 
     for hook in handles:
         hook.remove()

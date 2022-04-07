@@ -2,7 +2,7 @@ import itertools
 
 import torch
 import torch.optim as optim
-from deeptrees.analysis import track_tree_usage
+from deeptrees.analysis import randomize_tree_decisions, track_tree_usage
 from deeptrees.cascade import Batch, CascadeSGD
 from deeptrees.experiments.classifier.models import (
     conv_pool_tree_residual as model_initializer,
@@ -43,8 +43,10 @@ def main():
         test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
         with track_tree_usage(sgd_model) as tree_usage:
             train_loss, train_acc = compute_loss_acc(sgd_model, xs, ys, loss)
+        with randomize_tree_decisions(sgd_model):
+            _, train_acc_rand = compute_loss_acc(sgd_model, xs, ys, loss)
         print(
-            f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
+            f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} train_acc_rand={train_acc_rand:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )
         for tree, usage in tree_usage.items():
             print(

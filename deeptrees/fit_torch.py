@@ -82,7 +82,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
 
         def accuracy():
             preds = xs @ weight - bias
-            loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
+            loss = torch.relu(1 - preds * (classes.float() * 2 - 1)).view(-1)
             accuracies = ((preds > 0) == classes).float()
             return (
                 accuracies.mean().item(),

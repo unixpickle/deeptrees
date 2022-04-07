@@ -66,6 +66,10 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
         else:
             weight = nn.Parameter(torch.zeros_like(xs[0]))
             bias = nn.Parameter(torch.zeros_like(weight[0]))
+            if self.warm_start and isinstance(cur_branch, ObliqueTreeBranch):
+                with torch.no_grad():
+                    weight.copy_(cur_branch.coef)
+                    bias.copy_(cur_branch.threshold)
             opt = None
 
         if opt is None or self.reset_optimizer:

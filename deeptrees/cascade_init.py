@@ -77,12 +77,17 @@ class CascadeRawInit(CascadeInit):
 @dataclass
 class CascadeFrozenInit(CascadeInit):
     initializer: CascadeInit
+    no_update: bool = True
+    no_grad: bool = False
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
     ) -> Tuple[CascadeModule, Batch]:
         contained, outputs = self.initializer(inputs, targets)
-        return CascadeFrozen(contained), outputs
+        return (
+            CascadeFrozen(contained, no_update=self.no_update, no_grad=self.no_grad),
+            outputs,
+        )
 
 
 @dataclass

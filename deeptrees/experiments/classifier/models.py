@@ -85,7 +85,7 @@ def conv_pool_tree() -> CascadeInit:
             max_epochs=10,
             optimizer_kwargs=dict(lr=1e-3, weight_decay=0.01),
         ),
-        random_prob=0.1,
+        random_prob=0.0,
         reject_unimprovement=False,
         # replicate_leaves=True,
     )

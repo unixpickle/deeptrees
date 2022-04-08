@@ -350,7 +350,7 @@ class CascadeFrozen(CascadeModule):
         self.contained = contained
         self.no_update = no_update
         if no_grad:
-            for param in self.contained.parameters:
+            for param in self.contained.parameters():
                 param.requires_grad_(False)
 
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:

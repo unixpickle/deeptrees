@@ -343,10 +343,15 @@ class CascadeFrozen(CascadeModule):
     Prevent a sub-module from being updated.
     """
 
-    def __init__(self, contained: CascadeModule, no_update: bool = True):
+    def __init__(
+        self, contained: CascadeModule, no_update: bool = True, no_grad: bool = False
+    ):
         super().__init__()
         self.contained = contained
         self.no_update = no_update
+        if no_grad:
+            for param in self.contained.parameters:
+                param.requires_grad_(False)
 
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         return self.contained(inputs, ctx=None if self.no_update else ctx)

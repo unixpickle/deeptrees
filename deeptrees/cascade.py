@@ -854,6 +854,7 @@ class CascadeSGD(CascadeModule):
         contained: CascadeModule,
         opt: optim.Optimizer,
         interval: Optional[int] = None,
+        prioritize_sgd: bool = True,
         eval_mode_update: bool = False,
         interleave: bool = False,
     ):
@@ -861,6 +862,7 @@ class CascadeSGD(CascadeModule):
         self.contained = contained
         self.optimizer = opt
         self.interval = interval
+        self.prioritize_sgd = prioritize_sgd
         self.eval_mode_update = eval_mode_update
         self.interleave = interleave
         params = list(contained.parameters())
@@ -901,7 +903,7 @@ class CascadeSGD(CascadeModule):
                     batch_size=batch_size,
                     outer_batch_size=outer_batch_size,
                 )
-        elif self.step.item() % self.interval == 0:
+        elif (self.step.item() % self.interval == 0) == self.prioritize_sgd:
             return self._update_regular(
                 full_batch,
                 loss_fn,

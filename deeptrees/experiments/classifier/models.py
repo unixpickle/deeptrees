@@ -2,7 +2,7 @@ import torch.nn as nn
 from deeptrees.cascade import CascadeFlatten, CascadeFn
 from deeptrees.cascade_init import (
     CascadeConvInit,
-    CascadeFrozen,
+    CascadeFrozenInit,
     CascadeInit,
     CascadeParallelSumInit,
     CascadeRawInit,
@@ -92,7 +92,7 @@ def conv_pool_tree() -> CascadeInit:
     )
     return CascadeSequentialInit(
         [
-            CascadeFrozen(
+            CascadeFrozenInit(
                 CascadeConvInit(
                     contained=CascadeTAOInit(out_size=16, **tao_args),
                     kernel_size=3,
@@ -100,7 +100,7 @@ def conv_pool_tree() -> CascadeInit:
                     padding=1,
                 ),
             ),
-            CascadeFrozen(
+            CascadeFrozenInit(
                 CascadeConvInit(
                     contained=CascadeTAOInit(out_size=32, **tao_args),
                     kernel_size=3,
@@ -110,10 +110,10 @@ def conv_pool_tree() -> CascadeInit:
             ),
             CascadeRawInit(CascadeFn(nn.MaxPool2d(2))),
             CascadeRawInit(CascadeFlatten()),
-            CascadeFrozen(
+            CascadeFrozenInit(
                 CascadeTAOInit(out_size=128, **tao_args),
             ),
-            CascadeFrozen(
+            CascadeFrozenInit(
                 CascadeTAOInit(out_size=10, **tao_args),
                 no_update=False,
             ),

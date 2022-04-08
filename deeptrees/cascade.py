@@ -828,6 +828,8 @@ class CascadeConv(CascadeModule):
             all_indices: torch.Tensor, all_outputs: Batch
         ) -> torch.Tensor:
             losses = []
+            # Batch the loss computation by matching the maximum
+            # batch size used during forward().
             for minibatch_idxs, outputs in all_outputs.batches(batch_size):
                 indices = all_indices[minibatch_idxs]
 
@@ -843,8 +845,6 @@ class CascadeConv(CascadeModule):
                     len(selected), selected.shape[-1], *patches_shape[2:]
                 )
 
-                # Batch the loss computation by matching the maximum
-                # batch size used during forward().
                 output_batch = inputs.at_indices(indices).change_x(selected)
                 losses.append(loss_fn(spatial_indices, output_batch))
             return torch.cat(losses, dim=0)

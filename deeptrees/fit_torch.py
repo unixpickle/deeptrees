@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -147,6 +147,14 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             sum(history[-(self.converge_epochs + 1) : -1]) / self.converge_epochs
         )
         return history[-1] > prev_mean
+
+
+def find_branch_optimizers(module: nn.Module) -> Iterator[optim.Optimizer]:
+    if isinstance(module, _StatefulObliqueTreeBranch):
+        yield module.state["opt"]
+    else:
+        for child in module.children():
+            yield from find_branch_optimizers(child)
 
 
 class _StatefulObliqueTreeBranch(ObliqueTreeBranch):

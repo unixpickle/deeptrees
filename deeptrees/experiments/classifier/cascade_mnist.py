@@ -40,6 +40,7 @@ def main():
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
             batch_size=train_batch_size,
+            outer_batch_size=train_batch_size * 4,
         )
         test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
         with track_tree_usage(sgd_model) as tree_usage:

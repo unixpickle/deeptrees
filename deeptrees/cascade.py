@@ -824,25 +824,29 @@ class CascadeConv(CascadeModule):
         patch_array = outs.x.reshape([-1, patches_per_image, outs.x.shape[1]])
 
         @torch.no_grad()
-        def sampled_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
-            flat_indices = extras["indices"][indices]
-            spatial_indices = torch.div(
-                flat_indices, patches_per_image, rounding_mode="floor"
-            )
-            inner_indices = flat_indices % patches_per_image
-
-            selected = patch_array[spatial_indices].clone()
-            selected[range(len(selected)), inner_indices] = outputs.x
-            selected = selected.permute(0, 2, 1).reshape(
-                len(selected), selected.shape[-1], *patches_shape[2:]
-            )
-
-            # Batch the loss computation by matching the maximum
-            # batch size used during forward().
-            output_batch = inputs.at_indices(indices).change_x(selected)
+        def sampled_loss_fn(
+            all_indices: torch.Tensor, all_outputs: Batch
+        ) -> torch.Tensor:
             losses = []
-            for sub_indices, batch in output_batch.batches(batch_size):
-                losses.append(loss_fn(spatial_indices[sub_indices], batch))
+            for minibatch_idxs, outputs in all_outputs.batches(batch_size):
+                indices = all_indices[minibatch_idxs]
+
+                flat_indices = extras["indices"][indices]
+                spatial_indices = torch.div(
+                    flat_indices, patches_per_image, rounding_mode="floor"
+                )
+                inner_indices = flat_indices % patches_per_image
+
+                selected = patch_array[spatial_indices].clone()
+                selected[range(len(selected)), inner_indices] = outputs.x
+                selected = selected.permute(0, 2, 1).reshape(
+                    len(selected), selected.shape[-1], *patches_shape[2:]
+                )
+
+                # Batch the loss computation by matching the maximum
+                # batch size used during forward().
+                output_batch = inputs.at_indices(indices).change_x(selected)
+                losses.append(loss_fn(spatial_indices, output_batch))
             return torch.cat(losses, dim=0)
 
         self.contained.update_local(ctx, sampled_loss_fn)

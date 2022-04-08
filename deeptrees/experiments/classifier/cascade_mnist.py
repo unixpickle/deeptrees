@@ -13,8 +13,8 @@ from deeptrees.gradient_boosting import BoostingSoftmaxLoss
 
 def main():
     print("loading data...")
-    xs, ys = load_mnist(train=True, spatial=True)
-    test_xs, test_ys = load_mnist(train=False, spatial=True)
+    xs, ys = load_mnist(train=True, spatial=True, fashion=True)
+    test_xs, test_ys = load_mnist(train=False, spatial=True, fashion=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     xs, ys = xs.to(device), ys.to(device)
@@ -28,7 +28,8 @@ def main():
     sgd_model = CascadeSGD(
         model,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
-        interleave=True,
+        interval=5,
+        prioritize_sgd=False,
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 

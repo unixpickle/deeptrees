@@ -11,6 +11,7 @@ from .cascade import (
     Batch,
     CascadeCheckpoint,
     CascadeConv,
+    CascadeFrozen,
     CascadeGradientLoss,
     CascadeLinearGatedTAO,
     CascadeModule,
@@ -71,6 +72,17 @@ class CascadeRawInit(CascadeInit):
             inputs = module(inputs)
         _ = targets
         return module, inputs
+
+
+@dataclass
+class CascadeFrozenInit(CascadeInit):
+    initializer: CascadeInit
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[CascadeModule, Batch]:
+        contained, outputs = self.initializer(inputs, targets)
+        return CascadeFrozen(contained), outputs
 
 
 @dataclass

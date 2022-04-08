@@ -338,6 +338,24 @@ class CascadeSequential(CascadeModule):
             self.sequence[i].update_local(ctx, child_loss_fn)
 
 
+class CascadeFrozen(CascadeModule):
+    """
+    Prevent a sub-module from being updated.
+    """
+
+    def __init__(self, contained: CascadeModule, no_update: bool = True):
+        super().__init__()
+        self.contained = contained
+        self.no_update = no_update
+
+    def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        return self.contained(inputs, ctx=None if self.no_update else ctx)
+
+    def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        if not self.no_update:
+            self.contained.update(ctx, loss_fn)
+
+
 class CascadeParallelSum(CascadeModule):
     """
     Run sub-modules in parallel and them sum their outputs.

@@ -353,7 +353,7 @@ class CascadeFrozen(CascadeModule):
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         if not self.no_update:
-            self.contained.update(ctx, loss_fn)
+            self.contained.update_local(ctx, loss_fn)
 
 
 class CascadeParallelSum(CascadeModule):

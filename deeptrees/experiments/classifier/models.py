@@ -20,7 +20,7 @@ def conv_pool_tree_residual() -> CascadeInit:
         ),
         random_prob=0.1,
         reject_unimprovement=False,
-        zero_init_out=True,
+        # zero_init_out=True,
     )
     return CascadeSequentialInit(
         [
@@ -87,7 +87,7 @@ def conv_pool_tree() -> CascadeInit:
         ),
         random_prob=0.1,
         reject_unimprovement=False,
-        replicate_leaves=True,
+        # replicate_leaves=True,
     )
     return CascadeSequentialInit(
         [

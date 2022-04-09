@@ -245,6 +245,8 @@ class _ChangeConstraint:
             t = ts[num_change].item()
             lower = ts < t
             if not lower.any().item():
+                self.weight.copy_(self.orig_weight)
+                self.bias.copy_(self.orig_bias)
                 return False
             next_lowest = ts[lower].max().item()
             t = (next_lowest + t) / 2

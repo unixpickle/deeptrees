@@ -105,14 +105,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 batch_weight = epoch_weight[i : i + batch_size]
                 preds = batch_xs @ weight - bias
 
-                if self.cross_entropy_loss:
-                    loss = F.binary_cross_entropy_with_logits(
-                        preds.view(-1), batch_ys.view(-1).float(), reduction="none"
-                    )
-                else:
-                    # Hinge loss
-                    loss = torch.relu(1 - preds * (batch_ys.float() * 2 - 1)).view(-1)
-
+                loss = self.loss_fn(preds, batch_ys)
                 loss_sum = (loss * batch_weight).sum()
                 loss_mean = loss_sum / batch_weight.sum()
                 opt.zero_grad()
@@ -122,7 +115,15 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 iters += 1
                 if self.max_iters and iters >= self.max_iters:
                     break
-            change_constraint.constrain()
+
+            if change_constraint.constrain():
+                with torch.no_grad():
+                    total_loss = (
+                        (self.loss_fn((xs @ weight - bias), classes) * sample_weight)
+                        .sum()
+                        .item()
+                    )
+
             history.append(total_loss)
             if self.should_terminate(history) or (
                 self.max_iters and iters >= self.max_iters
@@ -146,6 +147,15 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
             )
         else:
             return ObliqueTreeBranch(**kwargs)
+
+    def loss_fn(self, preds: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+        if self.cross_entropy_loss:
+            return F.binary_cross_entropy_with_logits(
+                preds.view(-1), ys.view(-1).float(), reduction="none"
+            )
+        else:
+            # Hinge loss
+            return torch.relu(1 - preds * (ys.float() * 2 - 1)).view(-1)
 
     def should_terminate(self, history: List[float]) -> bool:
         if len(history) <= self.converge_epochs:
@@ -219,9 +229,9 @@ class _ChangeConstraint:
             old_logits = self.xs[changed] @ self.orig_weight - self.orig_bias
             new_logits = self.xs[changed] @ self.weight - self.bias
             ts = (old_logits / (old_logits - new_logits)).clamp(0, 1)
-            ts = torch.sort(ts)
+            ts, _ = torch.sort(ts)
 
-            num_change = max(0, min(len(ts) - 1, math.floor(self.frac * len(ts))))
+            num_change = max(0, min(len(ts) - 1, math.floor(self.frac * len(self.xs))))
             t = ts[num_change]
             self.weight.copy_(self.orig_weight * (1 - t) + self.weight * t)
             self.bias.copy_(self.orig_bias * (1 - t) + self.bias * t)

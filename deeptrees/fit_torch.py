@@ -116,7 +116,11 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 if self.max_iters and iters >= self.max_iters:
                     break
 
-            if change_constraint.constrain():
+            constrained = change_constraint.constrain()
+            if constrained is not None:
+                if not constrained:
+                    # Trivial constraint.
+                    break
                 with torch.no_grad():
                     total_loss = (
                         (self.loss_fn((xs @ weight - bias), classes) * sample_weight)
@@ -208,15 +212,19 @@ class _ChangeConstraint:
         self.bias = bias
         self.decisions = (xs @ self.orig_weight).view(-1) > self.orig_bias
 
-    def constrain(self) -> bool:
+    def constrain(self) -> Optional[bool]:
+        """
+        Return None for no constraint needed, True for constrained properly,
+        and False for impossible to constrain.
+        """
         if self.frac is None:
-            return False
+            return None
         with torch.no_grad():
             new_decisions = (self.xs @ self.weight).view(-1) > self.bias
             changed = new_decisions != self.decisions
             changed_frac = changed.float().mean().item()
             if changed_frac <= self.frac:
-                return False
+                return None
 
             # Find t s.t.
             #   self.xs @ (self.orig_weight + t*(self.weight-self.orig_weight))
@@ -231,8 +239,18 @@ class _ChangeConstraint:
             ts = (old_logits / (old_logits - new_logits)).clamp(0, 1)
             ts, _ = torch.sort(ts)
 
+            # Find a middle-ground between the percentile value and the
+            # value directly below it.
             num_change = max(0, min(len(ts) - 1, math.floor(self.frac * len(self.xs))))
-            t = ts[num_change]
+            t = ts[num_change].item()
+            lower = ts < t
+            if not lower.any().item():
+                self.weight.copy_(self.orig_weight)
+                self.bias.copy_(self.orig_bias)
+                return False
+            next_lowest = ts[lower].max().item()
+            t = (next_lowest + t) / 2
+
             self.weight.copy_(self.orig_weight * (1 - t) + self.weight * t)
             self.bias.copy_(self.orig_bias * (1 - t) + self.bias * t)
 

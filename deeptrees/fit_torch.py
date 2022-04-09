@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
@@ -29,6 +30,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
     warm_start: bool = True
     reset_optimizer: bool = False
     cross_entropy_loss: bool = False
+    max_change_frac: Optional[float] = None
 
     def fit_branch(
         self,
@@ -80,6 +82,10 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
         else:
             batch_size = min(self.batch_size, len(xs))
 
+        change_constraint = _ChangeConstraint(
+            frac=self.max_change_frac, xs=xs, weight=weight, bias=bias
+        )
+
         history = []
         iters = 0
         for _ in range(self.max_epochs):
@@ -116,6 +122,7 @@ class TorchObliqueBranchBuilder(TreeBranchBuilder):
                 iters += 1
                 if self.max_iters and iters >= self.max_iters:
                     break
+            change_constraint.constrain()
             history.append(total_loss)
             if self.should_terminate(history) or (
                 self.max_iters and iters >= self.max_iters
@@ -173,3 +180,56 @@ class _StatefulObliqueTreeBranch(ObliqueTreeBranch):
             threshold=self.threshold,
             random_prob=self.random_prob,
         )
+
+
+class _ChangeConstraint:
+    def __init__(
+        self,
+        frac: Optional[float],
+        xs: torch.Tensor,
+        weight: nn.Parameter,
+        bias: nn.Parameter,
+    ):
+        self.frac = frac
+        self.xs = xs
+        self.orig_weight = weight.detach().clone()
+        self.orig_bias = bias.detach().clone()
+        self.weight = weight
+        self.bias = bias
+        self.decisions = (xs @ self.orig_weight).view(-1) > self.orig_bias
+
+    def constrain(self) -> bool:
+        if self.frac is None:
+            return False
+        with torch.no_grad():
+            new_decisions = (self.xs @ self.weight).view(-1) > self.bias
+            changed = new_decisions != self.decisions
+            changed_frac = changed.float().mean().item()
+            if changed_frac <= self.frac:
+                return False
+
+            # Find t s.t.
+            #   self.xs @ (self.orig_weight + t*(self.weight-self.orig_weight))
+            #   - (self.orig_bias + t*(self.bias-self.orig_bias)) = 0
+            #   => t*new_logits + (1-t)*old_logits = 0
+            #   => t*new_logits + old_logits - t*old_logits = 0
+            #   => t*(new_logits-old_logits) = -old_logits
+            #   => t = old_logits/(old_logits-new_logits)
+
+            old_logits = self.xs[changed] @ self.orig_weight - self.orig_bias
+            new_logits = self.xs[changed] @ self.weight - self.bias
+            ts = (old_logits / (old_logits - new_logits)).clamp(0, 1)
+            ts = torch.sort(ts)
+
+            num_change = max(0, min(len(ts) - 1, math.floor(self.frac * len(ts))))
+            t = ts[num_change]
+            self.weight.copy_(self.orig_weight * (1 - t) + self.weight * t)
+            self.bias.copy_(self.orig_bias * (1 - t) + self.bias * t)
+
+            return True
+
+    def change_frac(self) -> float:
+        with torch.no_grad():
+            new_decisions = (self.xs @ self.weight).view(-1) > self.bias
+            changed = new_decisions != self.decisions
+            return changed.float().mean().item()

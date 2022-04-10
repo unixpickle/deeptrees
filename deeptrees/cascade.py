@@ -706,7 +706,12 @@ class CascadeConv(CascadeModule):
 
     Alternatively, the inner block can receive a local linear approximation of
     the loss function based on per-patch gradient information. To enable this
-    mode, pass gradient_loss=True.
+    mode, pass loss='gradient'.
+
+    Finally, some child blocks may work fine if the losses are correlated
+    between batch elements. In this case, the loss function can substitute all
+    of the new output patches at once, resulting in correlated losses. For this
+    mode, pass loss='correlated'.
 
     Input Tensors are assumed to be in NCH/NCHW/NCHWT order.
 
@@ -718,8 +723,8 @@ class CascadeConv(CascadeModule):
                         for the update function. Otherwise, subsampling is used
                         such that the number of subsampled patches is equal to
                         the number of input patches.
-    :param gradient_loss: if True, don't use subsampling, and instead use a
-                          linear approximation to the loss function.
+    :param loss: the loss function to use. Supported values are "subsample",
+                 "gradient", and "correlated".
     """
 
     def __init__(
@@ -729,28 +734,33 @@ class CascadeConv(CascadeModule):
         stride: int,
         padding: int,
         subsampling: Optional[float] = None,
-        gradient_loss: bool = False,
+        loss: str = "subsample",
     ):
         super().__init__()
+        assert loss in ["subsample", "gradient", "correlated"]
         self.contained = contained
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.subsampling = subsampling
-        self.gradient_loss = gradient_loss
+        self.loss = loss
 
     def forward(self, inputs: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
         x = self._extract_image_patches(inputs.x)
 
         # Run in the sub-module as one large (2D) batch.
         flat_in = inputs.change_x(flatten_image_patches(x))
-        out = self.contained(flat_in, ctx if self.gradient_loss else None)
+        out = self.contained(flat_in, None if self.loss == "subsample" else ctx)
 
         if ctx is not None:
             ctx.cache_outputs(self, out)
-            if self.gradient_loss:
+            if self.loss == "gradient":
                 out = ctx.require_grad(self, out)
-            else:
+            elif self.loss == "correlated":
+                ctx.cache_extra(
+                    self, Batch(x_shape=torch.tensor(x.shape, device=x.device))
+                )
+            elif self.loss == "subsample":
                 if self.subsampling is not None:
                     subsample_count = math.ceil(self.subsampling * len(out))
                 else:
@@ -781,10 +791,14 @@ class CascadeConv(CascadeModule):
         return extract_image_patches(x, self.kernel_size, self.stride, self.padding)
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
-        if self.gradient_loss:
+        if self.loss == "gradient":
             self.update_local_grad(ctx)
-        else:
+        elif self.loss == "correlated":
+            self.update_local_correlated(ctx, loss_fn)
+        elif self.loss == "subsample":
             self.update_local_subsample(ctx, loss_fn)
+        else:
+            raise ValueError(f"unsupported loss type {self.loss}")
 
     def update_local_grad(self, ctx: UpdateContext):
         original_out = ctx.get_outputs(self)
@@ -799,6 +813,23 @@ class CascadeConv(CascadeModule):
             return losses
 
         self.contained.update_local(ctx, local_loss_fn)
+
+    def update_local_correlated(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        old_outputs = ctx.get_outputs(self, ctx)
+        x_shape = ctx.get_extra(self)["x_shape"].cpu().numpy().tolist()
+
+        @torch.no_grad()
+        def inner_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
+            new_out = old_outputs.x.clone()
+            new_out[indices] = outputs.x
+            spatial = old_outputs.change_x(undo_image_patches(x_shape, new_out))
+            num_patches = len(new_out) // len(spatial.x)
+            losses = loss_fn(
+                torch.arange(len(spatial.x), device=new_out.device), spatial
+            )
+            return losses[indices // num_patches]
+
+        self.contained.update_local(ctx, inner_loss_fn)
 
     def update_local_subsample(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         inputs = ctx.get_inputs(self)

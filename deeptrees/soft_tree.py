@@ -97,20 +97,20 @@ class SoftTree(Tree):
             return self.leaves[0](xs)
 
         index_sequence = torch.arange(len(leaf_indices), device=leaf_indices.device)
-        inv_perm = torch.empty_like(leaf_indices)
-        offset = 0
-        outputs = []
+        result = None
         for i, leaf in enumerate(self.leaves):
             used = index_sequence[leaf_indices == i]
             if not len(used):
                 continue
             leaf_out = leaf(xs[used])
-            outputs.append(leaf_out)
-            inv_perm[used] = torch.arange(
-                offset, offset + len(leaf_out), device=xs.device
-            )
-            offset += len(leaf_out)
-        return torch.cat(outputs, dim=0)[inv_perm]
+            if result is None:
+                result = torch.empty(
+                    (len(xs), leaf_out.shape[1]),
+                    dtype=leaf_out.dtype,
+                    device=leaf_out.device,
+                )
+            result[used] = leaf_out
+        return result
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -184,9 +184,10 @@ class CascadeSoftTree(CascadeModule):
 
         inputs = ctx.get_inputs(self)
         indices = ctx.get_extra(self)["leaf_indices"]
+        indices_range = torch.arange(len(indices), device=indices.device)
 
         with torch.no_grad():
-            old_probs = self.tree.leaf_log_probs(inputs.x)[range(len(indices)), indices]
+            old_probs = self.tree.leaf_log_probs(inputs.x)[indices_range, indices]
 
         losses = ctx.get_losses()
         advs = -(losses - losses.mean()) / losses.std()
@@ -197,7 +198,7 @@ class CascadeSoftTree(CascadeModule):
         for i in range(self.iters):
             self.opt.zero_grad()
             log_probs = self.tree.leaf_log_probs(inputs.x.detach())
-            prob_ratio = (log_probs[range(len(indices)), indices] - old_probs).exp()
+            prob_ratio = (log_probs[indices_range, indices] - old_probs).exp()
             prob_ratio_clip = prob_ratio.clamp(1 - self.epsilon, 1 + self.epsilon)
             ppo_loss = torch.minimum(prob_ratio * advs, prob_ratio_clip * advs).mean()
             entropy = Categorical(logits=log_probs).entropy().mean()

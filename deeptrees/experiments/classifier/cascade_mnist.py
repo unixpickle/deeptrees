@@ -5,7 +5,7 @@ import torch.optim as optim
 from deeptrees.analysis import randomize_tree_decisions, track_tree_usage
 from deeptrees.cascade import Batch, CascadeSGD
 from deeptrees.experiments.classifier.models import (
-    conv_pool_soft_tree as model_initializer,
+    conv_pool_soft_tree_small as model_initializer,
 )
 from deeptrees.experiments.data import load_mnist
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss

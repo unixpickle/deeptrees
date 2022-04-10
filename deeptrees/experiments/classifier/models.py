@@ -14,6 +14,48 @@ from deeptrees.fit_torch import TorchObliqueBranchBuilder
 from deeptrees.soft_tree import CascadeSoftTreeInit
 
 
+def conv_pool_soft_tree_small() -> CascadeInit:
+    soft_tree_args = dict(
+        tree_depth=2,
+        iters=4,
+        optimizer=lambda x: optim.Adam(x, lr=1e-4),
+        verbose=True,
+    )
+    conv_unstrided = CascadeConvInit(
+        contained=CascadeSoftTreeInit(out_size=6, **soft_tree_args),
+        kernel_size=3,
+        stride=1,
+        padding=1,
+        loss="correlated",
+    )
+    conv_strided = CascadeConvInit(
+        contained=CascadeSoftTreeInit(out_size=6, **soft_tree_args),
+        kernel_size=3,
+        stride=2,
+        padding=1,
+        loss="correlated",
+    )
+    return CascadeSequentialInit(
+        [
+            conv_unstrided,
+            conv_strided,
+            conv_unstrided,
+            conv_strided,
+            conv_unstrided,
+            conv_strided,
+            CascadeRawInit(CascadeFn(lambda x: x.mean(dim=(2, 3)))),
+            CascadeSoftTreeInit(
+                out_size=128,
+                **soft_tree_args,
+            ),
+            CascadeSoftTreeInit(
+                out_size=10,
+                **soft_tree_args,
+            ),
+        ]
+    )
+
+
 def conv_pool_soft_tree() -> CascadeInit:
     soft_tree_args = dict(
         tree_depth=2,

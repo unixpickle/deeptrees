@@ -183,6 +183,21 @@ class UpdateContext:
         """
         return torch.cat(self._loss_cache, dim=0)
 
+    def with_losses(self, losses: torch.Tensor) -> "UpdateContext":
+        res = UpdateContext()
+        res._inputs_cache = self._inputs_cache
+        res._outputs_cache = self._outputs_cache
+        res._extra_cache = self._extra_cache
+        res._grads_cache = self._grads_cache
+        res._cur_autograd_cache = self._cur_autograd_cache
+        res._loss_cache = [losses]
+        return res
+
+    def with_losses_repeated(self, inner_multiplier: int) -> "UpdateContext":
+        return self.with_losses(
+            self.get_losses().view(-1, 1).repeat(1, inner_multiplier).reshape(-1)
+        )
+
     def get_inputs(
         self, module: nn.Module, concatenate: bool = True, remove: bool = True
     ) -> Union[Batch, List[Batch]]:
@@ -679,6 +694,7 @@ class CascadeCheckpoint(CascadeModule):
         # Re-cache all of the inner values, possibly backpropagating
         # from the global loss function if any gradients were requested.
         inner_ctx = UpdateContext()
+        orig_losses = ctx.get_losses()
         for i, (x, rng_state) in enumerate(zip(all_inputs, all_rng_states)):
             torch.set_rng_state(rng_state.x)
             out = self.contained(x, ctx=inner_ctx)
@@ -689,6 +705,8 @@ class CascadeCheckpoint(CascadeModule):
             loss = 0.0
             for k, g in all_grads[i].items():
                 loss = loss + _flat_sum(out[k] * g)
+            loss = loss - loss.detach() + orig_losses[: len(loss)]
+            orig_losses = orig_losses[len(loss) :]
             inner_ctx.backward(loss)
 
         torch.set_rng_state(backup_rng_state)
@@ -829,7 +847,10 @@ class CascadeConv(CascadeModule):
             )
             return losses[indices // num_patches]
 
-        self.contained.update_local(ctx, inner_loss_fn)
+        batch_multiplier = len(old_outputs) // len(ctx.get_losses())
+        self.contained.update_local(
+            ctx.with_losses_repeated(batch_multiplier), inner_loss_fn
+        )
 
     def update_local_subsample(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         inputs = ctx.get_inputs(self)
@@ -880,7 +901,12 @@ class CascadeConv(CascadeModule):
                 losses.append(loss_fn(spatial_indices, output_batch))
             return torch.cat(losses, dim=0)
 
-        self.contained.update_local(ctx, sampled_loss_fn)
+        self.contained.update_local(
+            ctx.with_losses(
+                ctx.get_losses()[torch.div(extra["indices"] // patches_per_image)]
+            ),
+            sampled_loss_fn,
+        )
 
 
 class CascadeSGD(CascadeModule):

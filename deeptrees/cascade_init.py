@@ -7,38 +7,19 @@ import torch
 import torch.nn as nn
 from sklearn.tree import DecisionTreeRegressor
 
-from .cascade import (
-    Batch,
-    CascadeCheckpoint,
-    CascadeConv,
-    CascadeFrozen,
-    CascadeGradientLoss,
-    CascadeLinearGatedTAO,
-    CascadeModule,
-    CascadeParallelSum,
-    CascadeSequential,
-    CascadeTAO,
-    extract_image_patches,
-    flatten_image_patches,
-    undo_image_patches,
-)
-from .cascade_nvp import (
-    CascadeNVPCheckpoint,
-    CascadeNVPGradientLoss,
-    CascadeNVPPartial,
-    CascadeNVPSequential,
-)
+from .cascade import (Batch, CascadeCheckpoint, CascadeConv, CascadeFrozen,
+                      CascadeGradientLoss, CascadeLinearGatedTAO,
+                      CascadeModule, CascadeParallelSum, CascadeSequential,
+                      CascadeTAO, extract_image_patches, flatten_image_patches,
+                      undo_image_patches)
+from .cascade_nvp import (CascadeNVPCheckpoint, CascadeNVPGradientLoss,
+                          CascadeNVPPartial, CascadeNVPSequential)
 from .fit_base import TreeBranchBuilder
 from .fit_sklearn import SklearnLinearLeafBuilder, SklearnRegressionTreeBuilder
 from .fit_torch import TorchObliqueBranchBuilder
 from .tao import TAOTreeBuilder
-from .tree import (
-    AxisTreeBranch,
-    ConstantTreeLeaf,
-    LinearTreeLeaf,
-    ObliqueTreeBranch,
-    Tree,
-)
+from .tree import (AxisTreeBranch, ConstantTreeLeaf, LinearTreeLeaf,
+                   ObliqueTreeBranch, Tree)
 
 
 @dataclass
@@ -117,7 +98,7 @@ class CascadeTAOInit(CascadeInit):
             zero_init_out=self.zero_init_out,
         )
         if self.replicate_leaves:
-            _replicate_leaves(tree)
+            replicate_leaves(tree)
         with torch.no_grad():
             inputs = Batch.with_x(tree(inputs.x))
         return (
@@ -222,7 +203,7 @@ class CascadeLinearGatedTAOInit(CascadeTAOInit):
             constant_leaf=True,
         )
         if self.replicate_leaves:
-            _replicate_leaves(tree)
+            replicate_leaves(tree)
         in_size = inputs.x.shape[1]
         layer = nn.Linear(in_size, self.out_size).to(inputs.x)
         with torch.no_grad():
@@ -502,7 +483,7 @@ class CascadeConvInit(CascadeInit):
     stride: int
     padding: int
     subsampling: Optional[float] = None
-    gradient_loss: bool = False
+    loss: str = 'subsample'
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None
@@ -522,7 +503,7 @@ class CascadeConvInit(CascadeInit):
             stride=self.stride,
             padding=self.padding,
             subsampling=self.subsampling,
-            gradient_loss=self.gradient_loss,
+            loss=self.loss,
         )
         inputs = inputs.with_x(undo_image_patches(x.shape, outputs.x))
 
@@ -552,6 +533,8 @@ def random_tree(
             )
     split_direction = torch.randn(in_size).to(xs)
     dots = (xs @ split_direction).view(-1)
+    split_direction /= dots.std()
+    dots /= dots.std()
     threshold = dots.median()
     decision = dots > threshold
     return ObliqueTreeBranch(
@@ -575,7 +558,7 @@ def random_tree(
     )
 
 
-def _replicate_leaves(t: Tree):
+def replicate_leaves(t: Tree):
     first = None
     for leaf in t.iterate_leaves():
         if first is None:

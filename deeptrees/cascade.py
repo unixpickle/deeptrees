@@ -830,11 +830,19 @@ class CascadeConv(CascadeModule):
                 losses = losses + _flat_sum((outputs[k] - x0[k]) * g)
             return losses
 
-        self.contained.update_local(ctx, local_loss_fn)
+        batch_multiplier = len(gradient) // len(ctx.get_losses())
+        self.contained.update_local(
+            ctx.with_losses_repeated(batch_multiplier), local_loss_fn
+        )
 
     def update_local_correlated(self, ctx: UpdateContext, loss_fn: BatchLossFn):
         old_outputs = ctx.get_outputs(self, ctx)
-        x_shape = ctx.get_extra(self)["x_shape"].cpu().numpy().tolist()
+        x_shapes = [
+            x["x_shape"].cpu().numpy().tolist()
+            for x in ctx.get_extra(self, concatenate=False)
+        ]
+        x_shape = list(x_shapes[0])
+        x_shape[0] = sum(x[0] for x in x_shapes)
 
         @torch.no_grad()
         def inner_loss_fn(indices: torch.Tensor, outputs: Batch) -> torch.Tensor:
@@ -845,7 +853,7 @@ class CascadeConv(CascadeModule):
             losses = loss_fn(
                 torch.arange(len(spatial.x), device=new_out.device), spatial
             )
-            return losses[indices // num_patches]
+            return losses[torch.div(indices, num_patches, rounding_mode="floor")]
 
         batch_multiplier = len(old_outputs) // len(ctx.get_losses())
         self.contained.update_local(

@@ -5,7 +5,7 @@ import torch.optim as optim
 from deeptrees.analysis import randomize_tree_decisions, track_tree_usage
 from deeptrees.cascade import Batch, CascadeSGD
 from deeptrees.experiments.classifier.models import (
-    conv_pool_tree_residual as model_initializer,
+    conv_pool_soft_tree as model_initializer,
 )
 from deeptrees.experiments.data import load_mnist
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
@@ -28,7 +28,8 @@ def main():
     sgd_model = CascadeSGD(
         model,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
-        interleave=True,
+        interval=5000000,
+        prioritize_sgd=False,
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 

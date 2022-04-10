@@ -1,7 +1,9 @@
 import torch.nn as nn
+import torch.optim as optim
 from deeptrees.cascade import CascadeFlatten, CascadeFn
 from deeptrees.cascade_init import (
     CascadeConvInit,
+    CascadeFrozenInit,
     CascadeInit,
     CascadeParallelSumInit,
     CascadeRawInit,
@@ -9,6 +11,50 @@ from deeptrees.cascade_init import (
     CascadeTAOInit,
 )
 from deeptrees.fit_torch import TorchObliqueBranchBuilder
+from deeptrees.soft_tree import CascadeSoftTreeInit
+
+
+def conv_pool_soft_tree() -> CascadeInit:
+    soft_tree_args = dict(
+        tree_depth=2,
+        iters=4,
+        optimizer=lambda x: optim.Adam(x, lr=1e-4),
+        verbose=True,
+    )
+    return CascadeSequentialInit(
+        [
+            CascadeFrozenInit(
+                CascadeConvInit(
+                    contained=CascadeSoftTreeInit(out_size=16, **soft_tree_args),
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    loss="correlated",
+                ),
+                no_update=False,
+            ),
+            CascadeFrozenInit(
+                CascadeConvInit(
+                    contained=CascadeSoftTreeInit(out_size=32, **soft_tree_args),
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    loss="correlated",
+                ),
+                no_update=False,
+            ),
+            CascadeRawInit(CascadeFn(nn.MaxPool2d(2))),
+            CascadeRawInit(CascadeFlatten()),
+            CascadeSoftTreeInit(
+                out_size=128,
+                **soft_tree_args,
+            ),
+            CascadeSoftTreeInit(
+                out_size=10,
+                **soft_tree_args,
+            ),
+        ]
+    )
 
 
 def conv_pool_tree_residual() -> CascadeInit:

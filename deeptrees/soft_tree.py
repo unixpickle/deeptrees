@@ -1,4 +1,5 @@
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Callable, Iterable, Iterator, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -7,10 +8,11 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 from .cascade import Batch, BatchLossFn, CascadeModule, UpdateContext
-from .tree import ObliqueTreeBranch, TreeLeaf
+from .cascade_init import CascadeInit, random_tree, replicate_leaves
+from .tree import ObliqueTreeBranch, Tree, TreeBranch, TreeLeaf
 
 
-class SoftTree(nn.Module):
+class SoftTree(Tree):
     def __init__(
         self,
         weights: torch.Tensor,
@@ -104,9 +106,41 @@ class SoftTree(nn.Module):
                 continue
             leaf_out = leaf(xs[used])
             outputs.append(leaf_out)
-            inv_perm[used] = torch.arange(offset, offset + len(leaf_out))
+            inv_perm[used] = torch.arange(
+                offset, offset + len(leaf_out), device=xs.device
+            )
             offset += len(leaf_out)
         return torch.cat(outputs, dim=0)[inv_perm]
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            log_probs = self.leaf_log_probs(xs)
+        leaf_indices = Categorical(probs=log_probs.exp()).sample()
+        return self.leaf_outputs(xs, leaf_indices)
+
+    def forward_chunks(
+        self, indices: torch.Tensor, xs: torch.Tensor
+    ) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        yield indices, self(xs)
+
+    def prune(self, xs: torch.Tensor) -> Tree:
+        _ = xs
+        return self
+
+    def map_branches(self, fn: Callable[[TreeBranch], TreeBranch]) -> Tree:
+        _ = fn
+        return self
+
+    def map_leaves(self, fn: Callable[[TreeLeaf], TreeLeaf]) -> Tree:
+        return self.__class__(
+            weights=self.weights,
+            biases=self.biases,
+            masks=self.masks,
+            leaves=[fn(x) for x in self.leaves],
+        )
+
+    def iterate_leaves(self) -> Iterator[TreeLeaf]:
+        yield from self.leaves
 
 
 class CascadeSoftTree(CascadeModule):
@@ -114,30 +148,108 @@ class CascadeSoftTree(CascadeModule):
     Update a SoftTree with policy gradients (i.e. REINFORCE).
     """
 
-    def __init__(self, tree: SoftTree, opt: optim.Optimizer, iters: int = 1):
+    def __init__(
+        self,
+        tree: SoftTree,
+        opt: optim.Optimizer,
+        iters: int = 1,
+        entropy_coef: float = 0.01,
+        epsilon: float = 0.1,
+        verbose: bool = False,
+    ):
+        super().__init__()
         self.tree = tree
         self.opt = opt
         self.iters = iters
+        self.entropy_coef = entropy_coef
+        self.epsilon = epsilon
+        self.verbose = verbose
 
     def forward(self, batch: Batch, ctx: Optional[UpdateContext] = None) -> Batch:
+        if ctx is None:
+            # Call forward() on self.tree directly so that tree-based
+            # usage analysis can use forward hooks on Tree sub-classes.
+            return batch.change_x(self.tree(batch.x))
+
         with torch.no_grad():
             log_probs = self.tree.leaf_log_probs(batch.x)
         leaf_indices = Categorical(probs=log_probs.exp()).sample()
         outs = batch.change_x(self.tree.leaf_outputs(batch.x, leaf_indices))
-        if ctx is not None:
-            ctx.cache_inputs(self, batch)
-            ctx.cache_outputs(self, Batch.with_x(outs))
-            ctx.cache_extra(self, Batch(leaf_indices=leaf_indices))
+        ctx.cache_inputs(self, batch)
+        ctx.cache_extra(self, Batch(leaf_indices=leaf_indices))
         return outs
 
     def update_local(self, ctx: UpdateContext, loss_fn: BatchLossFn):
+        _ = loss_fn
+
         inputs = ctx.get_inputs(self)
-        outputs = ctx.get_outputs(self)
         indices = ctx.get_extra(self)["leaf_indices"]
-        losses = loss_fn(torch.arange(len(outputs.x)), outputs)
-        losses = (losses - losses.mean()) / losses.std()
-        for _ in range(self.iters):
+
+        with torch.no_grad():
+            old_probs = self.tree.leaf_log_probs(inputs.x)[range(len(indices)), indices]
+
+        losses = ctx.get_losses()
+        advs = -(losses - losses.mean()) / losses.std()
+        if self.verbose:
+            print(
+                f"  - performing {self.iters} iterations of PPO (in_shape={inputs.x.shape})"
+            )
+        for i in range(self.iters):
             self.opt.zero_grad()
             log_probs = self.tree.leaf_log_probs(inputs.x.detach())
-            (log_probs[range(len(indices)), indices] * losses).mean().backward()
+            prob_ratio = (log_probs[range(len(indices)), indices] - old_probs).exp()
+            prob_ratio_clip = prob_ratio.clamp(1 - self.epsilon, 1 + self.epsilon)
+            ppo_loss = torch.minimum(prob_ratio * advs, prob_ratio_clip * advs).mean()
+            entropy = Categorical(logits=log_probs).entropy().mean()
+            loss = -(ppo_loss + self.entropy_coef * entropy)
+            loss.backward()
             self.opt.step()
+            if self.verbose:
+                clip_frac = (prob_ratio != prob_ratio_clip).float().mean().item()
+                print(
+                    f"   - step {i}: adv={ppo_loss.item()} entropy={entropy.item()} clip_frac={clip_frac}"
+                )
+
+
+@dataclass
+class CascadeSoftTreeInit(CascadeInit):
+    """
+    Randomly initialize a CascadeSoftTree with random splits of the data.
+    """
+
+    out_size: int
+    tree_depth: int
+    iters: int = 1
+    entropy_coef: float = 0.01
+    epsilon: int = 0.1
+    zero_init_out: bool = False
+    replicate_leaves: bool = False
+    verbose: bool = False
+    optimizer: Callable[
+        [Iterable[nn.Parameter]], optim.Optimizer
+    ] = lambda x: optim.Adam(x, lr=1e-3)
+
+    def __call__(
+        self, inputs: Batch, targets: Optional[Batch] = None
+    ) -> Tuple[CascadeModule, Batch]:
+        _ = targets
+        tree = random_tree(
+            inputs.x,
+            self.out_size,
+            self.tree_depth,
+            zero_init_out=self.zero_init_out,
+        )
+        if self.replicate_leaves:
+            replicate_leaves(tree)
+        soft_tree = SoftTree.from_oblique(tree)
+        module = CascadeSoftTree(
+            soft_tree,
+            opt=self.optimizer(soft_tree.parameters()),
+            iters=self.iters,
+            entropy_coef=self.entropy_coef,
+            epsilon=self.epsilon,
+            verbose=self.verbose,
+        )
+        with torch.no_grad():
+            inputs = module(inputs)
+        return module, inputs

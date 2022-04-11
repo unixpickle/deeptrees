@@ -28,8 +28,7 @@ def main():
     sgd_model = CascadeSGD(
         model,
         opt=optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1),
-        interval=5000000,
-        prioritize_sgd=False,
+        schedule=["sgd"] * 15 + ["base"] * 15,
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 

@@ -10,6 +10,8 @@ from deeptrees.experiments.classifier.models import (
 from deeptrees.experiments.data import load_mnist
 from deeptrees.gradient_boosting import BoostingSoftmaxLoss
 
+VERBOSE = False
+
 
 def main():
     print("loading data...")
@@ -48,10 +50,11 @@ def main():
         print(
             f"epoch {epoch}: train_loss={train_loss:.05} train_acc={train_acc:.05} train_acc_rand={train_acc_rand:.05} test_loss={test_loss:.05} test_acc={test_acc:.05}"
         )
-        for tree, usage in tree_usage.items():
-            print(
-                f"  - tree {tree}: used={usage.num_used()} entropy={usage.entropy():.05}"
-            )
+        if VERBOSE:
+            for tree, usage in tree_usage.items():
+                print(
+                    f"  - tree {tree}: used={usage.num_used()} entropy={usage.entropy():.05}"
+                )
 
 
 @torch.no_grad()

@@ -19,7 +19,7 @@ def conv_pool_soft_tree_small() -> CascadeInit:
         tree_depth=2,
         iters=4,
         optimizer=lambda x: optim.Adam(x, lr=1e-4),
-        verbose=True,
+        verbose=False,
     )
     conv_unstrided = CascadeConvInit(
         contained=CascadeSoftTreeInit(out_size=6, **soft_tree_args),

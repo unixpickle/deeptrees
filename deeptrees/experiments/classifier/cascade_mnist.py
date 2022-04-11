@@ -22,7 +22,8 @@ def main():
     xs, ys = xs.to(device), ys.to(device)
     test_xs, test_ys = test_xs.to(device), test_ys.to(device)
 
-    train_batch_size = 1024
+    train_batch_size = 512
+    outer_batch_size = 1024
 
     print("initializing TAO model...")
     init_batch_size = 2048
@@ -41,6 +42,7 @@ def main():
             full_batch=Batch.with_x(xs),
             loss_fn=lambda indices, batch: loss(batch.x, ys[indices]),
             batch_size=train_batch_size,
+            outer_batch_size=outer_batch_size,
         )
         test_loss, test_acc = compute_loss_acc(sgd_model, test_xs, test_ys, loss)
         with track_tree_usage(sgd_model) as tree_usage:

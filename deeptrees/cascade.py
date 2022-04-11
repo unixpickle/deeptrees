@@ -2,7 +2,18 @@ import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import torch
@@ -919,26 +930,37 @@ class CascadeConv(CascadeModule):
 
 class CascadeSGD(CascadeModule):
     """
-    Wrap sub-modules to perform frequent gradient-based updates and less
-    frequent recursive update() calls.
+    Wrap sub-modules to perform a mixture of SGD and global update() calls.
+
+    The module is provided with an infinitely cycling schedule, which outlines
+    which type of update happens at each epoch. For example, the schedule could
+    first perform one SGD epoch, then one update() epoch, then one interleaved
+    epoch, then two SGD epochs, then repeat forever. In this case, the schedule
+    would look like ['sgd', 'base', 'both', 'sgd', 'sgd'].
+
+    For each epoch, there are the following possible update types:
+        - 'sgd': perform gradient-based updates only. The outer batch size is
+                 ignored for these updates.
+        - 'base': perfrom update() calls only. The outer batch size is used
+                  for each update() call.
+        - 'both': interleave update() and SGD updates for each mini-batch. Each
+                  update() call is done with the outer batch size, and each SGD
+                  step is done with inner batch size chunks of the outer batch.
     """
 
     def __init__(
         self,
         contained: CascadeModule,
         opt: optim.Optimizer,
-        interval: Optional[int] = None,
-        prioritize_sgd: bool = True,
+        schedule: Sequence[str] = ("sgd", "update"),
         eval_mode_update: bool = False,
-        interleave: bool = False,
     ):
         super().__init__()
+        assert all(x in ["sgd", "base", "both"] for x in schedule)
         self.contained = contained
         self.optimizer = opt
-        self.interval = interval
-        self.prioritize_sgd = prioritize_sgd
+        self.schedule = schedule
         self.eval_mode_update = eval_mode_update
-        self.interleave = interleave
         params = list(contained.parameters())
         if len(params):
             device = params[0].device
@@ -959,35 +981,30 @@ class CascadeSGD(CascadeModule):
         batch_size: Optional[int] = None,
         outer_batch_size: Optional[int] = None,
     ) -> torch.Tensor:
+        step = self.step.item()
         self.step.add_(1)
+        update_type = self.schedule[step % len(self.schedule)]
 
-        if self.interval is None:
-            if self.interleave:
-                return self._update_interleave(
-                    full_batch,
-                    loss_fn,
-                    batch_size=batch_size,
-                    outer_batch_size=outer_batch_size,
-                )
-            else:
-                self._update_sgd(full_batch, loss_fn, batch_size=batch_size)
-                return self._update_regular(
-                    full_batch,
-                    loss_fn,
-                    batch_size=batch_size,
-                    outer_batch_size=outer_batch_size,
-                )
-        elif (self.step.item() % self.interval == 0) == self.prioritize_sgd:
-            return self._update_regular(
+        if update_type == "sgd":
+            return self._update_sgd(full_batch, loss_fn, batch_size=batch_size)
+        elif update_type == "base":
+            return self._update_base(
+                full_batch,
+                loss_fn,
+                batch_size=batch_size,
+                outer_batch_size=outer_batch_size,
+            )
+        elif update_type == "both":
+            return self._update_interleave(
                 full_batch,
                 loss_fn,
                 batch_size=batch_size,
                 outer_batch_size=outer_batch_size,
             )
         else:
-            return self._update_sgd(full_batch, loss_fn, batch_size=batch_size)
+            raise ValueError(f"unknown update type: {update_type}")
 
-    def _update_regular(
+    def _update_base(
         self,
         full_batch: Batch,
         loss_fn: BatchLossFn,
@@ -1037,7 +1054,7 @@ class CascadeSGD(CascadeModule):
         all_losses = []
         shuffled, perm, perm_inverse = _shuffle_with_inverse(full_batch)
         for indices, sub_batch in shuffled.batches(outer_batch_size or batch_size):
-            self._update_regular(
+            self._update_base(
                 sub_batch,
                 loss_fn=lambda x, y: loss_fn(perm[indices[x]], y),
                 batch_size=batch_size,

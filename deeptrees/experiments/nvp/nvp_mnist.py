@@ -55,7 +55,9 @@ def main():
         .checkpoint()(Batch.with_x(xs))
     )
     sgd_model = CascadeSGD(
-        model, interval=5, opt=optim.Adam(model.parameters(), lr=3e-4)
+        model,
+        schedule=["sgd"] * 4 + ["base"],
+        opt=optim.Adam(model.parameters(), lr=3e-4),
     )
     print(f"model has {sum(x.numel() for x in model.parameters())} parameters.")
 

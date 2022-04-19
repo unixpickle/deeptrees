@@ -1,3 +1,11 @@
+"""
+Cascade layers for implementing RealNVP-style normalizing flows.
+
+All layers in a normalizing flow should subclass CascadeNVPLayer, which defines
+special methods to override which report Jacobian determinant and can split off
+latents as desired.
+"""
+
 import itertools
 import math
 from abc import abstractmethod

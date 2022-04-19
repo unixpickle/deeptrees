@@ -1,3 +1,10 @@
+"""
+Helpers for probing the behavior of tree-based models at runtime.
+
+These APIs typically leverage PyTorch hooks and module introspection, and make
+various assumptions about the underlying tree structures.
+"""
+
 import math
 from contextlib import contextmanager
 from dataclasses import dataclass

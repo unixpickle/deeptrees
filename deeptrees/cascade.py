@@ -1,3 +1,21 @@
+"""
+The basis for cascaded networks of decision trees.
+
+Each layer in a cascade subclasses CascadeModule, which can perform forward
+(and backward) propagation through forward(), but also more flexible updates
+using an update() function.
+
+During update() calls and the preceding forward() calls, an UpdateContext is
+passed to each module which allows it to record values and request gradients of
+specific tensors at update() time.
+
+Throughout this module, Batch objects are used to store structured data. These
+are just dicts mapping strings to tensors. Since many functions only accept a
+single tensor argument, the special key 'x' in a Batch is typically the most
+useful, and the special methods `with_x`, `change_x`, and the property `x` make
+Batches less cumbersome to use.
+"""
+
 import math
 from abc import ABC, abstractmethod
 from collections import defaultdict

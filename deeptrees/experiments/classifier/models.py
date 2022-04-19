@@ -1,3 +1,9 @@
+"""
+Definitions of various MNIST classification models.
+
+These functions are intended to be importable by cascade_minst.py.
+"""
+
 import torch.nn as nn
 import torch.optim as optim
 from deeptrees.cascade import CascadeFlatten, CascadeFn

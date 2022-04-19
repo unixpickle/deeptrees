@@ -1,3 +1,15 @@
+"""
+Initializers for cascade modules.
+
+The base class, CascadeInit, can be overridden to create initializers for new
+kinds of layers. Module initialization may depend on the data distribution in
+order to make more intelligent initial splits, so a batch of data is passed to
+all initializers.
+
+Initializers can be composed: for example, the CascadeSequentialInit object
+initializes a sequence of sub-modules passed as CascadeInit objects.
+"""
+
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -7,19 +19,38 @@ import torch
 import torch.nn as nn
 from sklearn.tree import DecisionTreeRegressor
 
-from .cascade import (Batch, CascadeCheckpoint, CascadeConv, CascadeFrozen,
-                      CascadeGradientLoss, CascadeLinearGatedTAO,
-                      CascadeModule, CascadeParallelSum, CascadeSequential,
-                      CascadeTAO, extract_image_patches, flatten_image_patches,
-                      undo_image_patches)
-from .cascade_nvp import (CascadeNVPCheckpoint, CascadeNVPGradientLoss,
-                          CascadeNVPPartial, CascadeNVPSequential)
+from .cascade import (
+    Batch,
+    CascadeCheckpoint,
+    CascadeConv,
+    CascadeFrozen,
+    CascadeGradientLoss,
+    CascadeLinearGatedTAO,
+    CascadeModule,
+    CascadeParallelSum,
+    CascadeSequential,
+    CascadeTAO,
+    extract_image_patches,
+    flatten_image_patches,
+    undo_image_patches,
+)
+from .cascade_nvp import (
+    CascadeNVPCheckpoint,
+    CascadeNVPGradientLoss,
+    CascadeNVPPartial,
+    CascadeNVPSequential,
+)
 from .fit_base import TreeBranchBuilder
 from .fit_sklearn import SklearnLinearLeafBuilder, SklearnRegressionTreeBuilder
 from .fit_torch import TorchObliqueBranchBuilder
 from .tao import TAOTreeBuilder
-from .tree import (AxisTreeBranch, ConstantTreeLeaf, LinearTreeLeaf,
-                   ObliqueTreeBranch, Tree)
+from .tree import (
+    AxisTreeBranch,
+    ConstantTreeLeaf,
+    LinearTreeLeaf,
+    ObliqueTreeBranch,
+    Tree,
+)
 
 
 @dataclass
@@ -483,7 +514,7 @@ class CascadeConvInit(CascadeInit):
     stride: int
     padding: int
     subsampling: Optional[float] = None
-    loss: str = 'subsample'
+    loss: str = "subsample"
 
     def __call__(
         self, inputs: Batch, targets: Optional[Batch] = None

@@ -1,3 +1,11 @@
+"""
+Train a cascade classifier on MNIST or FashionMNIST, evaluating train and test
+accuracy after every epoch.
+
+This script is intended to be edited directly to hack around with ideas or new
+hyperparameters. Also see ./models.py which defines the available models.
+"""
+
 import itertools
 
 import torch

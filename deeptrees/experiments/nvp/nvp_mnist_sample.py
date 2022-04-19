@@ -1,3 +1,9 @@
+"""
+Produce a sample grid from nvp_mnist.py.
+
+Note that nvp_minst.py already saves samples periodically.
+"""
+
 import argparse
 
 import numpy as np

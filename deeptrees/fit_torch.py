@@ -1,3 +1,8 @@
+"""
+Train components of oblique decision trees with PyTorch for hardware
+acceleration.
+"""
+
 import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union

@@ -1,3 +1,7 @@
+"""
+Base classes for algorithms that construct branches and leaves of trees.
+"""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 

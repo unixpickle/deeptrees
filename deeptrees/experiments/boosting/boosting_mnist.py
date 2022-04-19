@@ -1,3 +1,10 @@
+"""
+Compare standard boosted trees with boosted TAO trees.
+
+The main finding from this experiment is that boosted TAO trees can achieve
+much lower train loss much faster, but overfit more quickly.
+"""
+
 import os
 import pickle
 

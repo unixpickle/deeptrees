@@ -1,3 +1,8 @@
+"""
+Decision trees with probabilistic oblique decision functins that can be trained
+with policy gradient algorithms.
+"""
+
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator, List, Optional, Tuple
 
@@ -145,7 +150,8 @@ class SoftTree(Tree):
 
 class CascadeSoftTree(CascadeModule):
     """
-    Update a SoftTree with policy gradients (i.e. REINFORCE).
+    Update a SoftTree with policy gradients. This uses a variation of
+    Proximal Policy Optimization (https://arxiv.org/abs/1707.06347).
     """
 
     def __init__(

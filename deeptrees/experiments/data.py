@@ -1,3 +1,7 @@
+"""
+Experiment data-loading helpers.
+"""
+
 import os
 import warnings
 from typing import Tuple, Union

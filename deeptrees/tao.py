@@ -1,6 +1,11 @@
 """
 A flexible base implementation of Tree Alternating Optimization:
 https://proceedings.neurips.cc/paper/2018/file/185c29dc24325934ee377cfda20e414c-Paper.pdf
+
+This implementation is intended to be reusable for more than just single trees.
+In particular, TAO can be applied to any situation where the loss can be
+conditioned on a leaf output. To leverage the general TAO algorithm in these
+general purpose scenarios, you can subclass the TAOBase object.
 """
 
 from abc import ABC, abstractmethod

@@ -1,3 +1,7 @@
+"""
+Train a tree-based RealNVP model to generate MNIST digits.
+"""
+
 import itertools
 import math
 import os
